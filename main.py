@@ -22,9 +22,9 @@ from loguru import logger
 # 配置日志
 logger.remove()
 logger.add(
-    "log/log.txt",
+    "log/log_{time:YYYY-MM-DD_HH-mm-ss}.txt",
     format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {message}",
-    level="DEBUG",
+    level="INFO",
     rotation="10 MB",
 )
 logger.add(

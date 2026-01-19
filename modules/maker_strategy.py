@@ -408,7 +408,7 @@ class MakerStrategy:
             # 按交易量排序
             filtered.sort(key=lambda x: x["volume"], reverse=True)
             
-            logger.info(f"找到 {len(filtered)} 个高流动性二元市场（已过滤多选市场）")
+            logger.debug(f"找到 {len(filtered)} 个高流动性二元市场（已过滤多选市场）")
             return filtered[:10]  # 只取前10个
             
         except Exception as e:
@@ -458,6 +458,33 @@ class MakerStrategy:
             
             return round(base_price + self.MAX_PRICE_DISTANCE, 4)
     
+            return f"(卖{better_count + 1}价)"
+    
+    def _get_rank_and_protection(self, order_book: OrderBook, side: str, price: float) -> str:
+        """获取价格排名描述和前方保护金额 (e.g. 买1价 $500)"""
+        if not order_book:
+            return "(未知)"
+            
+        better_count = 0
+        protection = 0.0
+        
+        if side == "BUY":
+            for level in order_book.bids:
+                if level.price > price + 0.0001:
+                    better_count += 1
+                    protection += level.total
+                else:
+                    break
+            return f"(买{better_count + 1}价 ${protection:.0f})"
+        else:
+            for level in order_book.asks:
+                if level.price < price - 0.0001:
+                    better_count += 1
+                    protection += level.total
+                else:
+                    break
+            return f"(卖{better_count + 1}价 ${protection:.0f})"
+    
     def should_adjust_order(self, order: MakerOrder, new_price: float) -> bool:
         """
         判断是否需要调整挂单
@@ -481,7 +508,9 @@ class MakerStrategy:
         """
         outcome = "YES"  # 默认做 YES 方向
         
-        logger.info(f"[挂单] {state.title[:30]} {side} {outcome} @ {price:.4f} ${self.ORDER_AMOUNT}")
+        # 计算排名
+        rank_str = self._get_rank_and_protection(state.order_book, side, price)
+        logger.info(f"[挂单] {state.title} {side} {outcome} @ {price:.4f} ${self.ORDER_AMOUNT} {rank_str}")
         
         if self.dry_run:
             logger.info(f"[测试模式] 跳过实际下单")
@@ -545,6 +574,11 @@ class MakerStrategy:
             
             self.total_orders += 1
             self.total_volume += self.ORDER_AMOUNT
+            
+            logger.success(f"[挂单成功] {state.title} @ {price:.4f} {rank_str} | 单号: {order_id}")
+            
+            # 下单成功后，打印当前挂单详情
+            self.log_current_orders()
             
             if self.dashboard:
                 self.dashboard.add_trade(
@@ -672,14 +706,19 @@ class MakerStrategy:
             
             # 判断是否需要调整
             if self.should_adjust_order(order, new_price):
-                logger.info(f"盘口变化，调整挂单: {order.price:.4f} -> {new_price:.4f}")
+                # 计算新旧排名
+                old_rank = self._get_rank_and_protection(order_book, order.side, order.price)
+                new_rank = self._get_rank_and_protection(order_book, order.side, new_price)
+                logger.info(f"盘口变化，调整挂单: {order.price:.4f} {old_rank} -> {new_price:.4f} {new_rank}")
                 
                 # 撤销旧单
                 if self.cancel_order(order):
                     state.active_order = None
                     
                     # 下新单
-                    self.place_maker_order(state, order.side, new_price)
+                    if self.place_maker_order(state, order.side, new_price):
+                        # 调整成功后，打印当前挂单详情
+                        self.log_current_orders()
         
         else:
             # 没有活跃挂单，尝试下新单
@@ -772,7 +811,7 @@ class MakerStrategy:
                                 )
                     
                     last_market_refresh = time.time()
-                    logger.info(f"监控 {len(self.markets)} 个市场")
+                    logger.debug(f"监控 {len(self.markets)} 个市场")
                 
                 # 处理每个市场
                 with self.lock:
@@ -789,10 +828,15 @@ class MakerStrategy:
                     self.dashboard.update_system_status(api=True, ws=False, proxy=self.proxy is not None)
                 
                 # 打印统计
-                active_count = sum(1 for o in self.orders.values() if o.status == OrderStatus.OPEN)
+                
+                # 周期性打印只显示在DEBUG (控制台)
+                self.log_current_orders(level="DEBUG")
+                
                 avg_time = self.total_order_time / max(1, self.total_orders)
-                mode = "监控模式(余额不足)" if self.insufficient_balance else "做市中"
-                logger.info(f"统计: {mode} | 挂单={active_count} 总单={self.total_orders} 平均时长={avg_time:.0f}秒 非预期成交={self.unexpected_fills}")
+                mode = "监控模式(余额不足)" if self.insufficient_balance else (f"正在做市: {len(self.markets)} 个市场")
+                
+                logger.debug(f"📊 {mode}")
+                logger.debug(f"📊 累计单量: {self.total_orders} 单 | 平均时长: {avg_time:.0f}s | 非预期成交: {self.unexpected_fills}")
                 
                 time.sleep(self.ORDERBOOK_REFRESH_INTERVAL)
         
@@ -806,6 +850,29 @@ class MakerStrategy:
                     self.cancel_order(order)
             
             self.running = False
+    
+    def log_current_orders(self, level="INFO"):
+        """打印当前挂单详情"""
+        active_orders = [o for o in self.orders.values() if o.status == OrderStatus.OPEN]
+        
+        if not active_orders:
+            return
+
+        log_func = getattr(logger, level.lower(), logger.info)
+        
+        log_func("当前挂单详情:")
+        idx = 1
+        for order in active_orders:
+            # 获取当前排名
+            state = self.markets.get(order.topic_id)
+            rank_str = self._get_rank_and_protection(state.order_book, order.side, order.price) if state else "(未知)"
+            duration = time.time() - order.create_time
+            
+            # Format: [1] Title... @ Price (Rank) | Duration
+            title_short = (order.title[:25] + "...") if len(order.title) > 25 else order.title
+            
+            log_func(f"  [{idx}] {title_short} @ {order.price:.4f} {rank_str} | Vol: ${state.volume:,.0f} | {duration:.0f}s")
+            idx += 1
     
     def stop(self):
         """停止策略"""

@@ -152,7 +152,11 @@ class OpinionFetcher:
         while True:
             params = dict(base_params)
             params["page"] = page
-            response = requests.get(url, headers=headers, params=params, proxies=self.proxy, timeout=10)
+            try:
+                response = requests.get(url, headers=headers, params=params, proxies=self.proxy, timeout=(5, 20))
+            except requests.RequestException as e:
+                logger.warning(f"获取市场列表网络异常 (Page {page}): {e}")
+                break
 
             if response.status_code == 401:
                 self.token = None
@@ -254,7 +258,7 @@ class OpinionFetcher:
                 break
             page += 1
 
-        logger.info(f"OpinionLabs: {len(markets)} 个市场")
+        logger.debug(f"OpinionLabs: {len(markets)} 个市场")
         return markets
 
     def fetch_market_by_id(self, topic_id: int) -> Optional[Dict]:

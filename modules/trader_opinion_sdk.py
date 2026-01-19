@@ -162,7 +162,7 @@ class OpinionTraderSDK:
                 "chain_id": market_chain_id,
             }
 
-            logger.info(f"市场: {market_info['title']} | YES={market_info['yes_token_id']} NO={market_info['no_token_id']}")
+            logger.debug(f"市场: {market_info['title']} | YES={market_info['yes_token_id']} NO={market_info['no_token_id']}")
             return market_info
 
         except Exception as e:
@@ -241,8 +241,8 @@ class OpinionTraderSDK:
 
             try:
                 result = self.client.place_order(data=order_data, check_approval=False)
-                logger.info(f"SDK 返回结果: {result}")
-                logger.info(f"结果类型: {type(result)}")
+                logger.debug(f"SDK 返回结果: {result}")
+                logger.debug(f"结果类型: {type(result)}")
                 if result:
                     # 检查返回结果中是否有错误
                     if hasattr(result, 'errno') and result.errno != 0:
@@ -253,7 +253,7 @@ class OpinionTraderSDK:
                             return "INSUFFICIENT_BALANCE"
                         return None
                     if hasattr(result, 'result'):
-                        logger.info(f"订单详情: {result.result}")
+                        logger.debug(f"订单详情: {result.result}")
             except Exception as sdk_error:
                 logger.error(f"SDK place_order 失败: {sdk_error}")
                 return None
@@ -315,7 +315,7 @@ class OpinionTraderSDK:
                     return None
                 if hasattr(result, 'result') and hasattr(result.result, 'list'):
                     orders = result.result.list or []
-                    logger.info(f"获取到 {len(orders)} 个订单")
+                    logger.debug(f"获取到 {len(orders)} 个订单")
                     return orders
             return []
         except Exception as e:
@@ -331,7 +331,7 @@ class OpinionTraderSDK:
             for order in orders:
                 if getattr(order, 'order_id', '') == order_id:
                     status = getattr(order, 'status', '')
-                    logger.info(f"订单 {order_id} 状态: {status}")
+                    logger.debug(f"订单 {order_id} 状态: {status}")
                     return str(status).lower() == 'filled'
             return False
         except Exception as e:
