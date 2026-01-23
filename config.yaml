@@ -52,17 +52,29 @@ maker_strategy:
   # 最小前方保护金额 (USD) - 确保前方有足够挂单保护
   min_protection_amount: 500.0
   # 距离 best bid/ask 的最小距离 - 避免被机器人扫单
-  min_price_distance: 0.006
+  min_price_distance: 0.005
   # 距离 best bid/ask 的最大距离 - 保持竞争力
   max_price_distance: 0.009
   # 价格变化阈值 - 小于此值不撤单，提升挂单时间权重
   price_change_threshold: 0.003
   # 每次挂单金额 (USD)
-  order_amount: 25
+  order_amount: 70
   # 最大同时挂单数
-  max_orders: 3
+  max_orders: 1
   # 最小交易量筛选 - 只选高流动性市场
   min_volume: 80000
+
+# Solo Market 监控配置
+solo_market:
+  # 要监控的市场 ID 列表（仅支持二元市场）
+  topic_ids: [4331]
+  # 最小前方保护金额 (USD) - 低于此值则撤单重新下单
+  min_protection_amount: 100
+  # 每次挂单金额 (USD)
+  order_amount: 10
+  # 最大bid位置
+  max_bid_position: 3
+
 
 # 日志配置
 logging:
