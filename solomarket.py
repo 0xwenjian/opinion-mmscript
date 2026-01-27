@@ -24,6 +24,88 @@ from modules.fetch_opinion import OpinionFetcher
 from modules.trader_opinion_sdk import OpinionTraderSDK
 
 
+class MockFetcher:
+    """模拟市场信息抓取层"""
+    def __init__(self, parent=None):
+        self.parent = parent
+        self.mock_ob = OrderBook(
+            bids=[
+                OrderBookLevel(0.80, 1000, 800),
+                OrderBookLevel(0.79, 1000, 790),
+                OrderBookLevel(0.78, 1000, 780),
+                OrderBookLevel(0.77, 1000, 770),
+                OrderBookLevel(0.76, 1000, 760),
+                OrderBookLevel(0.75, 1000, 750),
+                OrderBookLevel(0.74, 1000, 740),
+                OrderBookLevel(0.73, 1000, 730),
+                OrderBookLevel(0.72, 1000, 720),
+                OrderBookLevel(0.71, 1000, 710),
+            ],
+            asks=[OrderBookLevel(0.81, 1000, 810)],
+            best_bid=0.80,
+            best_ask=0.81
+        )
+
+    def set_mock_bid(self, index: int, price: float, size: float):
+        if index < len(self.mock_ob.bids):
+            self.mock_ob.bids[index].price = price
+            self.mock_ob.bids[index].size = size
+            self.mock_ob.bids[index].total = price * size
+            self.mock_ob.bids.sort(key=lambda x: x.price, reverse=True)
+            self.mock_ob.best_bid = self.mock_ob.bids[0].price
+
+    def shift_book(self, offset: float):
+        """整体平移盘口"""
+        for level in self.mock_ob.bids:
+            level.price = round(level.price + offset, 4)
+            level.total = level.price * level.size
+        for level in self.mock_ob.asks:
+            level.price = round(level.price + offset, 4)
+            level.total = level.price * level.size
+        self.mock_ob.best_bid = self.mock_ob.bids[0].price
+        self.mock_ob.best_ask = self.mock_ob.asks[0].price
+
+
+class MockTrader:
+    """模拟交易执行层"""
+    def __init__(self):
+        self.mock_fetcher = None
+        self.orders = {}
+        self.counter = 1000
+    
+    class MockClient:
+        def __init__(self, fetcher): self.fetcher = fetcher
+        def get_orderbook(self, token_id):
+            class Res: pass
+            res = Res(); res.result = self.fetcher.mock_ob
+            return res
+
+    def set_fetcher(self, fetcher):
+        self.mock_fetcher = fetcher
+        self.client = self.MockClient(fetcher)
+
+    def get_market_by_topic_id(self, topic_id):
+        return {
+            "title": f"Mock Market {topic_id}",
+            "yes_token_id": "mock_yes",
+            "no_token_id": "mock_no"
+        }
+
+    def place_order(self, **kwargs):
+        self.counter += 1
+        order_id = f"mock_order_{self.counter}"
+        logger.debug(f"[MockTrader] 下单: {kwargs['price']} {kwargs['outcome']}")
+        return type('Obj', (object,), {'order_id': order_id, 'result': None})
+
+    def cancel_order(self, order_id):
+        logger.debug(f"[MockTrader] 撤单: {order_id}")
+        return True
+
+    def check_order_status(self, order_id):
+        # 模拟模式下，订单永远是活跃的（不会被成交）
+        return {"status": "open"}
+
+
 @dataclass
 class OrderBookLevel:
     """订单簿价位"""
@@ -40,19 +122,29 @@ class OrderBook:
     best_bid: float = 0.0
     best_ask: float = 0.0
     
-    def get_protection_amount(self, side: str, price: float) -> float:
-        """计算目标价位前方的累计挂单金额（保护厚度）"""
+    def get_protection_amount(self, side: str, price: float, order_amount: float = 0.0) -> float:
+        """计算目标价位前方的累计挂单金额（保护厚度）
+        
+        逻辑:
+        - 包含所有优于目标价格的挂单
+        - 包含同一价格下优先于我们的挂单 (通过减去我们自己的金额来估算)
+        """
         total = 0.0
         if side == "BUY":
             for level in self.bids:
-                if level.price > price:
-                    total += level.size * level.price
+                if level.price > price + 0.00001:
+                    total += level.total
+                elif abs(level.price - price) < 0.00001:
+                    # 同一价格层级，假设我们排在最后，那么前方保护就是 (该层总额 - 我们自己的金额)
+                    total += max(0, level.total - order_amount)
                 else:
                     break
         else:
             for level in self.asks:
-                if level.price < price:
-                    total += level.size * level.price
+                if level.price < price - 0.00001:
+                    total += level.total
+                elif abs(level.price - price) < 0.00001:
+                    total += max(0, level.total - order_amount)
                 else:
                     break
         return total
@@ -80,6 +172,7 @@ class SoloMarketMonitor:
         self.topic_ids = solo_config.get('topic_ids', [])
         self.min_protection = solo_config.get('min_protection_amount', 500.0)
         self.order_amount = solo_config.get('order_amount', 50.0)
+        self.max_rank = solo_config.get('check_bid_position', 10) # 挂单最大档位限制
         
         # 初始化 fetcher 和 trader
         load_dotenv()
@@ -103,14 +196,20 @@ class SoloMarketMonitor:
                 'https': proxy_config.get('https'),
             }
         
-        self.fetcher = OpinionFetcher(private_key=private_key, proxy=proxy, apikey=apikey)
-        self.trader = OpinionTraderSDK(
-            private_key=private_key,
-            wallet_address=wallet_address,
-            apikey=apikey,
-            rpc_url=rpc_url,
-            proxy=proxy,
-        )
+        if config.get('simulation'):
+            logger.info(">>> 启用模拟模式 (Simulation Mode) <<<")
+            self.fetcher = MockFetcher(self)
+            self.trader = MockTrader()
+            self.trader.set_fetcher(self.fetcher)
+        else:
+            self.fetcher = OpinionFetcher(private_key=private_key, proxy=proxy, apikey=apikey)
+            self.trader = OpinionTraderSDK(
+                private_key=private_key,
+                wallet_address=wallet_address,
+                apikey=apikey,
+                rpc_url=rpc_url,
+                proxy=proxy,
+            )
         
         # 订单跟踪
         self.orders: Dict[int, SoloMarketOrder] = {}
@@ -122,6 +221,7 @@ class SoloMarketMonitor:
         logger.info(f"监控市场: {self.topic_ids}")
         logger.info(f"最小保护金额: ${self.min_protection}")
         logger.info(f"挂单金额: ${self.order_amount}")
+        logger.info(f"挂单档位限制: {self.max_rank}")
     
     def fetch_orderbook(self, topic_id: int, token_id: str) -> Optional[OrderBook]:
         """获取订单簿"""
@@ -173,65 +273,63 @@ class SoloMarketMonitor:
         except Exception as e:
             logger.debug(f"获取订单簿失败: {e}")
             return None
-    
-    def _get_rank_and_protection(self, order_book: OrderBook, side: str, price: float) -> str:
-        """获取价格排名描述和前方保护金额"""
+
+    def _get_rank_and_protection(self, order_book: OrderBook, side: str, price: float) -> tuple[int, float]:
+        """获取价格排名(1-based)和前方保护金额"""
         if not order_book:
-            return "(未知)"
+            return 0, 0.0
         
-        better_count = 0
-        protection = 0.0
+        rank = 1
+        # 在计算当前订单保护时，减去自己这一单的金额
+        protection = order_book.get_protection_amount(side, price, self.order_amount)
         
         if side == "BUY":
             for level in order_book.bids:
-                if level.price > price + 0.0001:
-                    better_count += 1
-                    protection += level.total
+                if level.price > price + 0.00001:
+                    rank += 1
                 else:
                     break
-            return f"(买{better_count + 1}价 ${protection:.0f})"
         else:
             for level in order_book.asks:
-                if level.price < price - 0.0001:
-                    better_count += 1
-                    protection += level.total
+                if level.price < price - 0.00001:
+                    rank += 1
                 else:
                     break
-            return f"(卖{better_count + 1}价 ${protection:.0f})"
+        return rank, protection
     
-    def calculate_safe_price(self, order_book: OrderBook) -> Optional[float]:
-        """计算安全挂单价格（买单）
+    def calculate_safe_price(self, order_book: OrderBook, max_rank: Optional[int] = None) -> Optional[tuple[float, int]]:
+        """计算安全挂单价格
         
-        逻辑：
-        1. 从 best_bid 开始向下遍历订单簿
-        2. 累加每一档的保护金额
-        3. 当累计保护金额达到 min_protection_amount 时
-        4. 在当前档位价格下方 0.1¢ (0.001) 处挂单
+        逻辑:
+        1. 遍历订单簿
+        2. 找到第一个满足 Cumulative_Protection >= min_protection_amount 的档位 i
+        3. 如果 i+1 > max_rank，说明位置太靠后了
+        4. 价格策略:
+           - 如果 i+1 == 1 (买1满足保护): 挂单价格 = level_1.price - 0.001
+           - 如果 i+1 > 1: 挂单价格 = level_i.price (匹配该档位)
         """
-        if not order_book or order_book.best_bid <= 0:
+        if not order_book or not order_book.bids:
             return None
         
-        # 遍历整个订单簿，找到第一个保护金额足够的位置
         cumulative_protection = 0.0
-        
         for i, level in enumerate(order_book.bids):
-            # 累加当前档位的保护金额
+            rank = i + 1
+            if max_rank and rank > max_rank:
+                break
+                
             cumulative_protection += level.total
             
-            # 如果累计保护金额达到要求
             if cumulative_protection >= self.min_protection:
-                # 在当前档位下方 0.1¢ 挂单
-                target_price = level.price - 0.001
+                if rank == 1:
+                    # 买1特殊处理: 挂在买1价 - 0.001
+                    target_price = level.price - 0.001
+                else:
+                    # 买2及以下: 匹配该档位价格
+                    target_price = level.price
                 
-                # 确保价格合理（不低于 0.01）
-                if target_price < 0.01:
-                    target_price = 0.01
-                
-                logger.debug(f"找到安全位置: 当前档位 {level.price:.4f}, 累计保护 ${cumulative_protection:.0f}, 挂单价格 {target_price:.4f}")
-                return round(target_price, 4)
+                if target_price < 0.01: target_price = 0.01
+                return round(target_price, 4), rank
         
-        # 如果整个订单簿都没有足够保护，返回 None
-        logger.warning(f"整个订单簿保护不足: ${cumulative_protection:.0f} < ${self.min_protection}")
         return None
     
     def place_order(self, topic_id: int) -> bool:
@@ -261,22 +359,22 @@ class SoloMarketMonitor:
                 logger.warning(f"无法获取市场 {topic_id} 订单簿")
                 return False
             
-            # 计算安全价格
-            price = self.calculate_safe_price(order_book)
-            if not price:
-                logger.warning(f"无法计算市场 {topic_id} 安全价格")
+            # 初始下单限制在 max_rank 内
+            calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
+            if not calc_res:
+                logger.warning(f"无法在限制档位 {self.max_rank} 内找到安全价格")
                 return False
             
-            # 检查保护金额
-            protection = order_book.get_protection_amount("BUY", price)
+            price, rank = calc_res
+            
+            # 再校验一次保护（冗余检查）
+            rank_check, protection = self._get_rank_and_protection(order_book, "BUY", price)
             if protection < self.min_protection:
                 logger.warning(f"市场 {topic_id} 保护不足: ${protection:.0f} < ${self.min_protection}")
                 return False
             
-            # 计算排名和保护
-            rank_str = self._get_rank_and_protection(order_book, "BUY", price)
-            
-            logger.info(f"[挂单] {title[:30]} @ {price:.4f} ${self.order_amount} {rank_str}")
+            rank_str = f"(买{rank_check}价 ${protection:.0f})"
+            logger.info(f"[下单准备] {title[:30]} | 目标价格: {price:.4f} {rank_str}")
             
             # 下单（直接传递 token_id 避免重复获取市场信息）
             result = self.trader.place_order(
@@ -341,49 +439,82 @@ class SoloMarketMonitor:
             market_info = self.market_info[topic_id]
             yes_token_id = market_info['yes_token_id']
             
+            # 检查订单是否还存在（可能已被成交）
+            try:
+                order_status = self.trader.check_order_status(order.order_id)
+                if order_status:
+                    # API 返回的是对象，不是字典
+                    status = getattr(order_status, 'status', None)
+                    if hasattr(order_status, 'result') and order_status.result:
+                        result_data = order_status.result
+                        if hasattr(result_data, 'order_data'):
+                            status = getattr(result_data.order_data, 'status', None)
+                    
+                    # 检查是否已成交 (status=3 表示已成交)
+                    if status in [3, '3', 'filled', 'FILLED']:
+                        duration = int(time.time() - order.create_time)
+                        logger.warning(f"⚠️ [非预期成交] {order.title[:30]} @ {order.price:.4f} | 金额: ${order.amount} | 时长: {duration}s")
+                        del self.orders[topic_id]
+                        return False
+            except Exception as e:
+                logger.debug(f"检查订单状态失败: {e}")
+            
             # 获取订单簿
             order_book = self.fetch_orderbook(topic_id, yes_token_id)
             if not order_book:
                 return False
             
-            # 检查当前订单的保护金额
-            current_protection = order_book.get_protection_amount("BUY", order.price)
+            # 获取当前状态
+            current_rank, current_protection = self._get_rank_and_protection(order_book, "BUY", order.price)
             
-            # 如果保护金额足够，保持不动
-            if current_protection >= self.min_protection:
-                logger.debug(f"市场 {topic_id} 保护充足: ${current_protection:.0f} >= ${self.min_protection}")
+            needs_adjust = False
+            reason = ""
+            
+            # 触发器 A: 保护不足 (始终监控)
+            if current_protection < self.min_protection:
+                needs_adjust = True
+                reason = "保护不足"
+                logger.info(f"市场 {topic_id} {reason}: ${current_protection:.0f} < ${self.min_protection}")
+            
+            # 触发器 B: 档位超标 (仅在 > N 位时触发向上部位)
+            elif current_rank > self.max_rank:
+                needs_adjust = True
+                reason = "档位超标"
+                logger.info(f"市场 {topic_id} {reason}: 买{current_rank} > 限制{self.max_rank}")
+            
+            if not needs_adjust:
                 order.last_check_time = time.time()
                 return True
             
-            # 保护不足，需要调整
-            logger.info(f"市场 {topic_id} 保护不足: ${current_protection:.0f} < ${self.min_protection}，准备调整")
+            # 需要调整
+            # 策略：即使因为档位超标触发，也是寻找 [1, max_rank] 范围内最好的安全位置
+            # 如果实在找不到，说明市场变厚了或者保护设置太高。
+            calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
             
-            # 计算新的安全价格
-            new_price = self.calculate_safe_price(order_book)
-            if not new_price:
-                logger.warning(f"无法计算新的安全价格")
-                return False
+            # 如果全球范围内（不限档位）也没有安全位置，那就没办法了
+            if not calc_res:
+                global_res = self.calculate_safe_price(order_book) # 全球搜索
+                if not global_res:
+                    logger.warning(f"市场 {topic_id} 全球搜索亦无安全位置，保持原样")
+                    return True
+                calc_res = global_res
+                
+            new_price, new_rank = calc_res
             
-            # 计算新旧排名
-            old_rank = self._get_rank_and_protection(order_book, "BUY", order.price)
-            new_rank = self._get_rank_and_protection(order_book, "BUY", new_price)
-            
-            logger.info(f"盘口变化，调整挂单: {order.price:.4f} {old_rank} -> {new_price:.4f} {new_rank}")
+            # 如果算出来价格没变，且不是因为保护不足触发的，那就没必要动
+            if abs(new_price - order.price) < 0.00001 and reason != "保护不足":
+                return True
+
+            logger.info(f"触发调整({reason}): {order.price:.4f}(买{current_rank}) -> {new_price:.4f}(买{new_rank})")
             
             # 撤销旧单
-            duration = int(time.time() - order.create_time)
-            logger.info(f"[撤单] {order.title[:30]} @ {order.price:.4f} | 挂单时长: {duration}s")
             success = self.trader.cancel_order(order.order_id)
-            
             if not success:
                 logger.error("撤单失败")
                 return False
             
-            # 删除旧订单记录
             del self.orders[topic_id]
-            
-            # 下新单
-            time.sleep(0.5)  # 短暂延迟
+            time.sleep(0.5)
             return self.place_order(topic_id)
             
         except Exception as e:
@@ -421,7 +552,8 @@ class SoloMarketMonitor:
                         if market_info:
                             order_book = self.fetch_orderbook(topic_id, market_info['yes_token_id'])
                             if order_book:
-                                rank_str = self._get_rank_and_protection(order_book, "BUY", order.price)
+                                rank, protection = self._get_rank_and_protection(order_book, "BUY", order.price)
+                                rank_str = f"(买{rank}价 ${protection:.0f})"
                             else:
                                 rank_str = "(未知)"
                         else:
@@ -431,6 +563,25 @@ class SoloMarketMonitor:
                         logger.debug(f"[{order.title[:30]}] @ {order.price:.4f} {rank_str} | 已挂单: {duration}s")
                     logger.debug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 
+                if self.config.get('simulation'):
+                    # 模拟模式下，根据输入执行特定的盘口变化
+                    # 注意：在真实的循环中，这通常需要异步非阻塞输入，这里简化为每5秒自动触发一次演示
+                    elapsed = int(time.time()) % 30
+                    if elapsed == 5:
+                        logger.warning("[模拟] 盘口向上大平移 10¢, 触发档位由1变为11+ (超标)...")
+                        self.fetcher.shift_book(0.10)
+                        time.sleep(1)
+                    elif elapsed == 15:
+                        logger.warning("[模拟] 剧烈削减盘口厚度, 触发保护不足...")
+                        # 将前5档全部削减
+                        for i in range(5):
+                            self.fetcher.set_mock_bid(i, 0.85 - i*0.01, 10.0)
+                        time.sleep(1)
+                    elif elapsed == 25:
+                        logger.warning("[模拟] 盘口恢复厚度...")
+                        self.fetcher.set_mock_bid(0, 0.85, 2000.0)
+                        time.sleep(1)
+
                 time.sleep(1)  # 尽可能频繁检查
         
         except KeyboardInterrupt:
@@ -464,10 +615,22 @@ def main():
         level="DEBUG",
     )
     
+    # 解析命令行参数
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sim", action="store_true", help="运行模拟模式")
+    args = parser.parse_args()
+
     # 加载配置
     with open('config.yaml', 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
+    if args.sim:
+        config['simulation'] = True
+        config['solo_market']['topic_ids'] = [4306]
+        config['solo_market']['min_protection_amount'] = 500
+        config['solo_market']['check_bid_position'] = 5 # 模拟模式把限制调小，容易触发
+
     # 创建监控器
     monitor = SoloMarketMonitor(config)
     

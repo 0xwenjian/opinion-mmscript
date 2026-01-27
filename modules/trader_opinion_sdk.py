@@ -74,6 +74,7 @@ class OpinionTraderSDK:
             logger.info(f"从私钥派生钱包地址: {wallet_address}")
 
         self.wallet_address = wallet_address
+        self.apikey = apikey  # 保存 apikey 用于 API 调用
 
         try:
             if not rpc_url:
@@ -137,7 +138,17 @@ class OpinionTraderSDK:
 
             yes_token_id = getattr(market, "yesTokenId", None) or getattr(market, "yes_token_id", None)
             no_token_id = getattr(market, "noTokenId", None) or getattr(market, "no_token_id", None)
-            title = getattr(market, "title", "N/A")
+            
+            # 尝试从 API 对象获取标题
+            title = (getattr(market, "title", None) or 
+                    getattr(market, "topic_title", None) or
+                    getattr(market, "topicTitle", None) or
+                    getattr(market, "name", None))
+            
+            # 如果没有标题，从公开 API 获取
+            if not title:
+                title = self.get_market_title(topic_id)
+            
             market_chain_id = getattr(market, "chainId", None) or getattr(market, "chain_id", None)
 
             market_status = getattr(market, 'status', None)
@@ -168,6 +179,32 @@ class OpinionTraderSDK:
         except Exception as e:
             logger.error(f"获取市场详情异常: {e}")
             return None
+
+    def get_market_title(self, topic_id: int) -> str:
+        """从 Opinion API 获取市场标题"""
+        try:
+            import requests
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            url = f"https://openapi.opinion.trade/openapi/market/{topic_id}"
+            headers = {'apikey': self.apikey} if hasattr(self, 'apikey') and self.apikey else {}
+            
+            response = requests.get(url, headers=headers, timeout=5, verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                # API 返回格式: {'result': {'data': {'marketTitle': '...'}}}
+                if data and 'result' in data:
+                    result = data['result']
+                    if isinstance(result, dict) and 'data' in result:
+                        market_data = result['data']
+                        if isinstance(market_data, dict) and 'marketTitle' in market_data:
+                            title = market_data['marketTitle']
+                            logger.debug(f"从 API 获取到市场标题: {title[:50]}")
+                            return title
+        except Exception as e:
+            logger.debug(f"获取市场标题失败: {e}")
+        return f"Market {topic_id}"
 
     def place_order(
         self,
@@ -291,6 +328,10 @@ class OpinionTraderSDK:
         except Exception as e:
             logger.error(f"查询订单状态异常: {e}")
             return None
+
+    def check_order_status(self, order_id: str) -> Optional[Dict]:
+        """检查订单状态（别名方法，用于兼容性）"""
+        return self.get_order_status(order_id)
 
     def get_balance(self) -> Optional[float]:
         """获取账户余额"""
