@@ -231,8 +231,15 @@ class SoloMarketMonitor:
                 return None
             
             # 使用 SDK 获取订单簿
+            logger.debug(f"正在获取订单簿: topic_id={topic_id}, token_id={token_id[:20]}...")
             ob_result = self.trader.client.get_orderbook(str(token_id))
-            if not ob_result or not hasattr(ob_result, 'result'):
+            
+            if not ob_result:
+                logger.debug(f"SDK 返回空结果")
+                return None
+                
+            if not hasattr(ob_result, 'result'):
+                logger.debug(f"SDK 返回无 result 属性: {type(ob_result)}")
                 return None
             
             result = ob_result.result
@@ -244,6 +251,8 @@ class SoloMarketMonitor:
             
             bid_list = getattr(data, 'bids', []) or []
             ask_list = getattr(data, 'asks', []) or []
+            
+            logger.debug(f"订单簿数据: {len(bid_list)} bids, {len(ask_list)} asks")
             
             for bid in bid_list:
                 price = float(getattr(bid, 'price', 0) or 0)
@@ -267,11 +276,15 @@ class SoloMarketMonitor:
             if best_bid > 0:
                 logger.debug(f"订单簿: 市场 {topic_id} best_bid={best_bid:.4f} best_ask={best_ask:.4f}")
                 return OrderBook(bids=bids, asks=asks, best_bid=best_bid, best_ask=best_ask)
+            else:
+                logger.debug(f"订单簿无有效买单")
             
             return None
             
         except Exception as e:
             logger.debug(f"获取订单簿失败: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
 
     def _get_rank_and_protection(self, order_book: OrderBook, side: str, price: float) -> tuple[int, float]:
@@ -367,11 +380,8 @@ class SoloMarketMonitor:
             
             price, rank = calc_res
             
-            # 再校验一次保护（冗余检查）
+            # 计算该价格的排名和前方保护（用于日志显示）
             rank_check, protection = self._get_rank_and_protection(order_book, "BUY", price)
-            if protection < self.min_protection:
-                logger.warning(f"市场 {topic_id} 保护不足: ${protection:.0f} < ${self.min_protection}")
-                return False
             
             rank_str = f"(买{rank_check}价 ${protection:.0f})"
             logger.info(f"[下单准备] {title[:30]} | 目标价格: {price:.4f} {rank_str}")

@@ -71,7 +71,7 @@ solo_market:
   # 最小前方保护金额 (USD) - 低于此值则撤单重新下单
   min_protection_amount: 160
   # 每次挂单金额 (USD)
-  order_amount: 30
+  order_amount: 60
   check_bid_position: 5 # 挂单的最大档位限制，超过此档位会触发向上补位逻辑
 
 
