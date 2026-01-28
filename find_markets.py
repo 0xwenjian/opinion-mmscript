@@ -63,6 +63,7 @@ def main():
             continue
         
         yes_price = float(m.get("yesPrice", 0) or 0)
+        # 只排除极端价格
         if yes_price < 0.1 or yes_price > 0.9:
             continue
         
@@ -72,21 +73,25 @@ def main():
             if market_info and market_info.get('yes_token_id'):
                 available_markets.append({
                     "topic_id": topic_id,
-                    "title": m.get("title", "")[:50],
+                    "title": market_info.get("title", m.get("title", ""))[:50],
                     "yes_price": yes_price,
                     "volume": volume,
+                    "distance_to_half": abs(yes_price - 0.5),  # 计算与 0.5 的距离
                 })
-                logger.info(f"✓ {topic_id}: {m.get('title', '')[:50]} (Vol: ${volume:,.0f})")
+                logger.info(f"✓ {topic_id}: {market_info.get('title', '')[:50]} | Price: ${yes_price:.3f} | Vol: ${volume:,.0f}")
         except Exception as e:
             logger.debug(f"✗ {topic_id}: {e}")
             continue
     
     logger.info(f"\n找到 {len(available_markets)} 个可用市场")
-    logger.info("\n推荐使用的市场 ID（按交易量排序）：")
+    logger.info("\n推荐使用的市场 ID（按价格接近0.5优先，交易量从低到高排序）：")
     
-    available_markets.sort(key=lambda x: x['volume'], reverse=True)
-    for i, m in enumerate(available_markets[:10], 1):
-        logger.info(f"{i}. {m['topic_id']} - {m['title']}")
+    # 先按价格距离 0.5 的远近排序，再按交易量从低到高排序
+    available_markets.sort(key=lambda x: (x['distance_to_half'], x['volume']))
+    
+    for i, m in enumerate(available_markets[:20], 1):
+        distance_pct = m['distance_to_half'] * 100
+        logger.info(f"{i}. {m['topic_id']} - {m['title']} | Price: ${m['yes_price']:.3f} (距0.5: {distance_pct:.1f}%) | Vol: ${m['volume']:,.0f}")
     
     logger.info(f"\n请将这些 ID 添加到 config.yaml 的 solo_market.topic_ids 中")
 
