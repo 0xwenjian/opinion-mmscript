@@ -1,7 +1,7 @@
-# Solo Market 原理说明书
+# Solo Market说明
 
 本文档详细说明了 `solomarket.py` 脚本的核心执行逻辑和设计原理。
-
+## Author @0xwenjian
 ---
 
 ## 核心配置参数
