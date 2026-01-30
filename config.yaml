@@ -67,17 +67,23 @@ maker_strategy:
 # Solo Market 监控配置
 solo_market:
   # 要监控的市场 ID 列表（仅支持二元市场）
-  topic_ids: [3039]
+  topic_ids: [3039,3357,1856]
   # 最小前方保护金额 (USD) - 低于此值则撤单重新下单
-  min_protection_amount: 160
+  min_protection_amount: 500
   # 每次挂单金额 (USD)
-  order_amount: 60
-  check_bid_position: 5 # 挂单的最大档位限制，超过此档位会触发向上补位逻辑
+  order_amount: 80
+  check_bid_position: 6 # 挂单的最大档位限制，超过此档位会触发向上补位逻辑
 
 
 # 日志配置
 logging:
   level: INFO
 
+# Telegram 通知配置
+telegram:
+  bot_token: "8544750989:AAHPsUmnmFE9jXOeDxVeZHbNdApd1Vbnc9Y"
+  chat_id: "1986441477"
+
   # caffeinate -i -s python3 main.py
+  # python3 find_markets.py
   # caffeinate -i -s python3 solomarket.py

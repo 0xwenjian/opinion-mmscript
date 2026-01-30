@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import yaml
+import requests
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from loguru import logger
@@ -22,6 +23,22 @@ from dotenv import load_dotenv
 # 导入现有模块
 from modules.fetch_opinion import OpinionFetcher
 from modules.trader_opinion_sdk import OpinionTraderSDK
+
+# Telegram 通知配置（从 config.yaml 加载）
+TG_BOT_TOKEN = ""
+TG_CHAT_ID = ""
+
+
+def send_tg_notification(message: str, proxy: Dict = None):
+    """发送 Telegram 通知"""
+    if not TG_CHAT_ID or not TG_BOT_TOKEN:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+        data = {"chat_id": TG_CHAT_ID, "text": message, "parse_mode": "HTML"}
+        requests.post(url, data=data, timeout=10, proxies=proxy)
+    except Exception as e:
+        logger.warning(f"TG通知失败: {e}")
 
 
 class MockFetcher:
@@ -174,6 +191,12 @@ class SoloMarketMonitor:
         self.order_amount = solo_config.get('order_amount', 50.0)
         self.max_rank = solo_config.get('check_bid_position', 10) # 挂单最大档位限制
         
+        # 加载 Telegram 配置
+        global TG_BOT_TOKEN, TG_CHAT_ID
+        tg_config = config.get('telegram', {})
+        TG_BOT_TOKEN = tg_config.get('bot_token', '')
+        TG_CHAT_ID = tg_config.get('chat_id', '')
+        
         # 初始化 fetcher 和 trader
         load_dotenv()
         private_key = os.getenv('OPINION_PRIVATE_KEY')
@@ -216,6 +239,10 @@ class SoloMarketMonitor:
         self.market_info: Dict[int, Dict] = {}
         
         self.running = False
+        
+        # 状态报告定时器 - 改为每小时整点推送
+        self.last_status_report = time.time()
+        self.next_report_hour = -1  # 下次报告的小时数
         
         logger.info(f"Solo Market 监控器初始化完成")
         logger.info(f"监控市场: {self.topic_ids}")
@@ -376,6 +403,22 @@ class SoloMarketMonitor:
             calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
             if not calc_res:
                 logger.warning(f"无法在限制档位 {self.max_rank} 内找到安全价格")
+                
+                # 发送 TG 通知
+                proxy_config = self.config.get('proxy', {})
+                proxy = None
+                if proxy_config.get('enabled'):
+                    proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
+                
+                msg = f"""⚠️ <b>订单超出档位限制</b>
+━━━━━━━━━━━━━━━
+📌 市场: {title[:40]}
+📊 限制档位: <code>{self.max_rank}</code>
+💰 最小保护: <code>${self.min_protection}</code>
+━━━━━━━━━━━━━━━
+无法在限制档位内找到安全价格，订单已取消！"""
+                send_tg_notification(msg, proxy)
+                
                 return False
             
             price, rank = calc_res
@@ -464,6 +507,24 @@ class SoloMarketMonitor:
                     if status in [3, '3', 'filled', 'FILLED']:
                         duration = int(time.time() - order.create_time)
                         logger.warning(f"⚠️ [非预期成交] {order.title[:30]} @ {order.price:.4f} | 金额: ${order.amount} | 时长: {duration}s")
+                        
+                        # 发送 TG 通知
+                        proxy_config = self.config.get('proxy', {})
+                        proxy = None
+                        if proxy_config.get('enabled'):
+                            proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
+                        
+                        msg = f"""⚠️ <b>非预期成交</b>
+━━━━━━━━━━━━━━━
+📌 市场: {order.title[:40]}
+📊 方向: BUY YES
+💰 价格: <code>{order.price:.4f}</code>
+💵 金额: <code>${order.amount}</code>
+⏰ 挂单时长: <code>{duration}秒</code>
+━━━━━━━━━━━━━━━
+请检查市场状况！"""
+                        send_tg_notification(msg, proxy)
+                        
                         del self.orders[topic_id]
                         return False
             except Exception as e:
@@ -531,6 +592,87 @@ class SoloMarketMonitor:
             logger.error(f"检查调整订单异常: {e}")
             return False
     
+    def send_status_report(self):
+        """发送状态报告到 Telegram"""
+        try:
+            # 获取账户余额
+            available_balance = "未知"
+            frozen_balance = "未知"
+            total_balance = "未知"
+            try:
+                if hasattr(self.trader, 'client') and hasattr(self.trader.client, 'get_my_balances'):
+                    balances = self.trader.client.get_my_balances()
+                    if balances and hasattr(balances, 'result'):
+                        result = balances.result
+                        
+                        # result 直接就是数据对象，没有 data 包装
+                        if hasattr(result, 'balances') and result.balances:
+                            # 通常只有一个 USDC 余额
+                            bal = result.balances[0]
+                            available_balance = f"${float(getattr(bal, 'available_balance', 0) or 0):.2f}"
+                            frozen_balance = f"${float(getattr(bal, 'frozen_balance', 0) or 0):.2f}"
+                            total_balance = f"${float(getattr(bal, 'total_balance', 0) or 0):.2f}"
+            except Exception as e:
+                logger.debug(f"获取余额失败: {e}")
+            
+            # 构建挂单信息
+            order_lines = []
+            total_amount = 0.0
+            
+            for topic_id, order in self.orders.items():
+                market_info = self.market_info.get(topic_id)
+                if market_info:
+                    order_book = self.fetch_orderbook(topic_id, market_info['yes_token_id'])
+                    if order_book:
+                        rank, protection = self._get_rank_and_protection(order_book, "BUY", order.price)
+                        rank_str = f"买{rank}价"
+                        protection_str = f"${protection:.0f}"
+                    else:
+                        rank_str = "未知"
+                        protection_str = "未知"
+                else:
+                    rank_str = "未知"
+                    protection_str = "未知"
+                
+                duration = int((time.time() - order.create_time) / 3600)  # 转换为小时
+                order_lines.append(
+                    f"📌 {order.title[:30]}\n"
+                    f"   价格: <code>{order.price:.4f}</code> | {rank_str} | 保护: {protection_str}\n"
+                    f"   金额: <code>${order.amount}</code> | 已挂: {duration}小时"
+                )
+                total_amount += order.amount
+            
+            if not order_lines:
+                order_info = "<i>当前无挂单</i>"
+            else:
+                order_info = "\n\n".join(order_lines)
+            
+            # 发送通知
+            proxy_config = self.config.get('proxy', {})
+            proxy = None
+            if proxy_config.get('enabled'):
+                proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
+            
+            msg = f"""📊 <b>Solo Market 状态报告</b>
+━━━━━━━━━━━━━━━
+💰 可用余额: <code>{available_balance}</code>
+🔒 冻结余额: <code>{frozen_balance}</code>
+💵 总余额: <code>{total_balance}</code>
+📦 挂单数量: <code>{len(self.orders)}</code>
+💼 挂单总额: <code>${total_amount:.2f}</code>
+━━━━━━━━━━━━━━━
+
+{order_info}
+
+━━━━━━━━━━━━━━━
+⏰ 报告时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"""
+            
+            send_tg_notification(msg, proxy)
+            logger.info("已发送状态报告到 Telegram")
+            
+        except Exception as e:
+            logger.error(f"发送状态报告失败: {e}")
+    
     def run(self):
         """运行监控"""
         self.running = True
@@ -544,6 +686,9 @@ class SoloMarketMonitor:
                 time.sleep(1)  # 避免请求过快
             
             logger.info(f"已下单 {len(self.orders)} 个市场")
+            
+            # 发送初始状态报告
+            self.send_status_report()
             
             # 持续监控
             while self.running:
@@ -572,6 +717,19 @@ class SoloMarketMonitor:
                         duration = int(time.time() - order.create_time)
                         logger.debug(f"[{order.title[:30]}] @ {order.price:.4f} {rank_str} | 已挂单: {duration}s")
                     logger.debug("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                
+                # 检查是否需要发送整点状态报告
+                current_time = time.localtime()
+                current_hour = current_time.tm_hour
+                current_minute = current_time.tm_min
+                
+                # 在每小时的第0分钟发送报告（允许1分钟的误差窗口）
+                if current_minute == 0 and current_hour != self.next_report_hour:
+                    self.send_status_report()
+                    self.next_report_hour = current_hour
+                elif current_minute > 1:
+                    # 重置下次报告小时数，避免错过整点
+                    self.next_report_hour = -1
                 
                 if self.config.get('simulation'):
                     # 模拟模式下，根据输入执行特定的盘口变化
