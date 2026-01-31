@@ -67,11 +67,11 @@ maker_strategy:
 # Solo Market 监控配置
 solo_market:
   # 要监控的市场 ID 列表（仅支持二元市场）
-  topic_ids: [3039,3357,1856]
+  topic_ids: [3039,3357]
   # 最小前方保护金额 (USD) - 低于此值则撤单重新下单
   min_protection_amount: 500
   # 每次挂单金额 (USD)
-  order_amount: 80
+  order_amount: 120
   check_bid_position: 6 # 挂单的最大档位限制，超过此档位会触发向上补位逻辑
 
 

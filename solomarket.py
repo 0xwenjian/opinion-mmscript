@@ -11,6 +11,7 @@ Solo Market 监控脚本
 """
 
 import os
+import socket
 import sys
 import time
 import yaml
@@ -183,6 +184,9 @@ class SoloMarketMonitor:
     """Solo Market 监控器"""
     
     def __init__(self, config: Dict):
+        # 设置全局 socket 超时，防止网络请求无限挂起，解决 urllib3 无限重试或卡死问题
+        socket.setdefaulttimeout(20)
+        
         self.config = config
         solo_config = config.get('solo_market', {})
         
