@@ -24,6 +24,8 @@ from dotenv import load_dotenv
 # 导入现有模块
 from modules.fetch_opinion import OpinionFetcher
 from modules.trader_opinion_sdk import OpinionTraderSDK
+from modules.models import OrderBook, OrderBookLevel, SoloMarketOrder
+from modules.mock_utils import MockFetcher, MockTrader
 
 # Telegram 通知配置（从 config.yaml 加载）
 TG_BOT_TOKEN = ""
@@ -40,148 +42,6 @@ def send_tg_notification(message: str, proxy: Dict = None):
         requests.post(url, data=data, timeout=10, proxies=proxy)
     except Exception as e:
         logger.warning(f"TG通知失败: {e}")
-
-
-class MockFetcher:
-    """模拟市场信息抓取层"""
-    def __init__(self, parent=None):
-        self.parent = parent
-        self.mock_ob = OrderBook(
-            bids=[
-                OrderBookLevel(0.80, 1000, 800),
-                OrderBookLevel(0.79, 1000, 790),
-                OrderBookLevel(0.78, 1000, 780),
-                OrderBookLevel(0.77, 1000, 770),
-                OrderBookLevel(0.76, 1000, 760),
-                OrderBookLevel(0.75, 1000, 750),
-                OrderBookLevel(0.74, 1000, 740),
-                OrderBookLevel(0.73, 1000, 730),
-                OrderBookLevel(0.72, 1000, 720),
-                OrderBookLevel(0.71, 1000, 710),
-            ],
-            asks=[OrderBookLevel(0.81, 1000, 810)],
-            best_bid=0.80,
-            best_ask=0.81
-        )
-
-    def set_mock_bid(self, index: int, price: float, size: float):
-        if index < len(self.mock_ob.bids):
-            self.mock_ob.bids[index].price = price
-            self.mock_ob.bids[index].size = size
-            self.mock_ob.bids[index].total = price * size
-            self.mock_ob.bids.sort(key=lambda x: x.price, reverse=True)
-            self.mock_ob.best_bid = self.mock_ob.bids[0].price
-
-    def shift_book(self, offset: float):
-        """整体平移盘口"""
-        for level in self.mock_ob.bids:
-            level.price = round(level.price + offset, 4)
-            level.total = level.price * level.size
-        for level in self.mock_ob.asks:
-            level.price = round(level.price + offset, 4)
-            level.total = level.price * level.size
-        self.mock_ob.best_bid = self.mock_ob.bids[0].price
-        self.mock_ob.best_ask = self.mock_ob.asks[0].price
-
-
-class MockTrader:
-    """模拟交易执行层"""
-    def __init__(self):
-        self.mock_fetcher = None
-        self.orders = {}
-        self.counter = 1000
-    
-    class MockClient:
-        def __init__(self, fetcher): self.fetcher = fetcher
-        def get_orderbook(self, token_id):
-            class Res: pass
-            res = Res(); res.result = self.fetcher.mock_ob
-            return res
-
-    def set_fetcher(self, fetcher):
-        self.mock_fetcher = fetcher
-        self.client = self.MockClient(fetcher)
-
-    def get_market_by_topic_id(self, topic_id):
-        return {
-            "title": f"Mock Market {topic_id}",
-            "yes_token_id": "mock_yes",
-            "no_token_id": "mock_no"
-        }
-
-    def place_order(self, **kwargs):
-        self.counter += 1
-        order_id = f"mock_order_{self.counter}"
-        logger.debug(f"[MockTrader] 下单: {kwargs['price']} {kwargs['outcome']}")
-        return type('Obj', (object,), {'order_id': order_id, 'result': None})
-
-    def cancel_order(self, order_id):
-        logger.debug(f"[MockTrader] 撤单: {order_id}")
-        return True
-
-    def check_order_status(self, order_id):
-        # 模拟模式下，订单永远是活跃的（不会被成交）
-        return {"status": "open"}
-
-
-@dataclass
-class OrderBookLevel:
-    """订单簿价位"""
-    price: float
-    size: float
-    total: float
-
-
-@dataclass
-class OrderBook:
-    """订单簿"""
-    bids: List[OrderBookLevel]
-    asks: List[OrderBookLevel]
-    best_bid: float = 0.0
-    best_ask: float = 0.0
-    
-    def get_protection_amount(self, side: str, price: float, order_amount: float = 0.0) -> float:
-        """计算目标价位前方的累计挂单金额（保护厚度）
-        
-        逻辑:
-        - 包含所有优于目标价格的挂单
-        - 包含同一价格下优先于我们的挂单 (通过减去我们自己的金额来估算)
-        """
-        total = 0.0
-        if side == "BUY":
-            for level in self.bids:
-                if level.price > price + 0.00001:
-                    total += level.total
-                elif abs(level.price - price) < 0.00001:
-                    # 遇到我们自己的挂单价格（同价位）
-                    # 极端保守策略：假设我们排在最前面（First in Queue）
-                    # 意味着同价位的其他所有单子都在我们后面，完全不能提供保护（Shield）
-                    # 只有价格比我们高的单子才是真正的保护伞
-                    total += 0 
-                else:
-                    break
-        else:
-            for level in self.asks:
-                if level.price < price - 0.00001:
-                    total += level.total
-                elif abs(level.price - price) < 0.00001:
-                    # 同上，卖单同理
-                    total += 0
-                else:
-                    break
-        return total
-
-
-@dataclass
-class SoloMarketOrder:
-    """订单记录"""
-    order_id: str
-    topic_id: int
-    title: str
-    price: float
-    amount: float
-    create_time: float
-    last_check_time: float = 0.0
 
 
 class SoloMarketMonitor:
@@ -414,24 +274,28 @@ class SoloMarketMonitor:
                 logger.warning(f"无法获取市场 {topic_id} 订单簿")
                 return False
             
-            # 初始下单限制在 max_rank 内
+            # 尝试在 max_rank 内寻找安全价格
             calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
+            
             if not calc_res:
-                logger.warning(f"无法在限制档位 {self.max_rank} 内找到安全价格")
+                logger.info(f"无法在限制档位 {self.max_rank} 内找到安全价格，尝试在全球范围内寻找...")
+                calc_res = self.calculate_safe_price(order_book, max_rank=None) # 全球搜索
+            
+            if not calc_res:
+                logger.warning(f"在全球范围内亦无法找到满足 ${self.min_protection} 保护的安全价格")
                 
-                # 发送 TG 通知
+                # 发送 TG 通知 (仅在完全找不到安全位置时)
                 proxy_config = self.config.get('proxy', {})
                 proxy = None
                 if proxy_config.get('enabled'):
                     proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
                 
-                msg = f"""⚠️ <b>订单超出档位限制</b>
+                msg = f"""⚠️ <b>无法找到安全挂单位置</b>
 ━━━━━━━━━━━━━━━
 📌 市场: {title[:40]}
-📊 限制档位: <code>{self.max_rank}</code>
 💰 最小保护: <code>${self.min_protection}</code>
 ━━━━━━━━━━━━━━━
-无法在限制档位内找到安全价格，订单已取消！"""
+当前订单簿深度不足以满足保护要求，下单已跳过！"""
                 send_tg_notification(msg, proxy)
                 
                 return False
@@ -564,41 +428,43 @@ class SoloMarketMonitor:
             
             needs_adjust = False
             reason = ""
+            calc_res = None
             
             # 触发器 A: 保护不足 (始终监控)
             if current_protection < self.min_protection:
                 needs_adjust = True
                 reason = "保护不足"
-                logger.info(f"市场 {topic_id} {reason}: ${current_protection:.0f} < ${self.min_protection}")
+                logger.info(f"市场 {topic_id} {reason}: 当前保护 ${current_protection:.0f} < 阈值 ${self.min_protection}")
+                
+                # 寻找新位置：先看范围内，再看全球
+                calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
+                if not calc_res:
+                    calc_res = self.calculate_safe_price(order_book) # 全球搜索
             
-            # 触发器 B: 档位超标 (仅在 > N 位时触发向上部位)
+            # 触发器 B: 档位超标 (仅在当前处于范围推荐外，且范围内出现了新的安全位置时触发)
             elif current_rank > self.max_rank:
-                needs_adjust = True
-                reason = "档位超标"
-                logger.info(f"市场 {topic_id} {reason}: 买{current_rank} > 限制{self.max_rank}")
+                # 检查范围内是否有安全价格可以回归
+                back_in_range_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
+                if back_in_range_res:
+                    # 发现范围内有安全位置了，执行回归
+                    needs_adjust = True
+                    reason = "档位超标 (回归范围)"
+                    calc_res = back_in_range_res
+                    logger.info(f"市场 {topic_id} {reason}: 当前买{current_rank}，探测到范围内买{calc_res[1]}已安全")
+                else:
+                    # 虽然档位超标，但范围内依然不安全，继续保持当前深度观察，不报警
+                    pass
             
-            if not needs_adjust:
+            if not needs_adjust or not calc_res:
                 order.last_check_time = time.time()
                 return True
             
-            # 需要调整
-            # 策略：即使因为档位超标触发，也是寻找 [1, max_rank] 范围内最好的安全位置
-            # 如果实在找不到，说明市场变厚了或者保护设置太高。
-            calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
-            
-            # 如果全球范围内（不限档位）也没有安全位置，那就没办法了
-            if not calc_res:
-                global_res = self.calculate_safe_price(order_book) # 全球搜索
-                if not global_res:
-                    logger.warning(f"市场 {topic_id} 全球搜索亦无安全位置，保持原样")
-                    return True
-                calc_res = global_res
-                
             new_price, new_rank = calc_res
             
-            # 如果算出来价格没变，且不是因为保护不足触发的，那就没必要动
-            if abs(new_price - order.price) < 0.00001 and reason != "保护不足":
+            # 如果新算出的价格和旧价格一致，且不是因为保护不足（即保护依然由于某种边界计算导致的微小差异），则忽略
+            if abs(new_price - order.price) < 0.00001:
                 return True
+
 
             # 打印前10档盘口信息，辅助观察
             logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
