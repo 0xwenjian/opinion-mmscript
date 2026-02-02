@@ -153,8 +153,11 @@ class OrderBook:
                 if level.price > price + 0.00001:
                     total += level.total
                 elif abs(level.price - price) < 0.00001:
-                    # 同一价格层级，假设我们排在最后，那么前方保护就是 (该层总额 - 我们自己的金额)
-                    total += max(0, level.total - order_amount)
+                    # 遇到我们自己的挂单价格（同价位）
+                    # 极端保守策略：假设我们排在最前面（First in Queue）
+                    # 意味着同价位的其他所有单子都在我们后面，完全不能提供保护（Shield）
+                    # 只有价格比我们高的单子才是真正的保护伞
+                    total += 0 
                 else:
                     break
         else:
@@ -162,7 +165,8 @@ class OrderBook:
                 if level.price < price - 0.00001:
                     total += level.total
                 elif abs(level.price - price) < 0.00001:
-                    total += max(0, level.total - order_amount)
+                    # 同上，卖单同理
+                    total += 0
                 else:
                     break
         return total
@@ -316,6 +320,8 @@ class SoloMarketMonitor:
             logger.debug(f"获取订单簿失败: {e}")
             import traceback
             logger.debug(traceback.format_exc())
+            # 遇到网络错误时暂停 10 秒，防止请求过快导致被服务器重置连接 (ConnectionResetError)
+            time.sleep(10)
             return None
 
     def _get_rank_and_protection(self, order_book: OrderBook, side: str, price: float) -> tuple[int, float]:
@@ -363,13 +369,18 @@ class SoloMarketMonitor:
                 
             cumulative_protection += level.total
             
-            if cumulative_protection >= self.min_protection:
-                if rank == 1:
-                    # 买1特殊处理: 挂在买1价 - 0.001
-                    target_price = level.price - 0.001
-                else:
-                    # 买2及以下: 匹配该档位价格
-                    target_price = level.price
+            # 极度保守策略：只有更高价位的挂单才算保护
+            # 我们不信任同价位的挂单（level.total），因为它们可能撤单，或者我们在队列中变前
+            prev_protection = cumulative_protection - level.total
+            
+            if prev_protection >= self.min_protection:
+                # 找到了安全位置
+                # 注意：在这种逻辑下，rank=1 (i=0) 永远不可能触发 (prev=0)，
+                # 除非 min_protection 设置为 0。这符合"绝不当出头鸟"的原则。
+                
+                # 直接匹配该档位价格
+                # (不再尝试在买1前插队 -0.001，因为我们根本不会选买1)
+                target_price = level.price
                 
                 if target_price < 0.01: target_price = 0.01
                 return round(target_price, 4), rank
@@ -426,6 +437,15 @@ class SoloMarketMonitor:
                 return False
             
             price, rank = calc_res
+
+            # 打印前10档盘口信息，辅助观察
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            logger.info(f"[{title[:30]}] 市场深度 (前10档):")
+            cumulative_total = 0.0
+            for i, level in enumerate(order_book.bids[:10]):
+                cumulative_total += level.total
+                logger.info(f"   买{i+1}: {level.price:.4f} (本档: ${level.total:.0f} | 累计保护: ${cumulative_total:.0f})")
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             
             # 计算该价格的排名和前方保护（用于日志显示）
             rank_check, protection = self._get_rank_and_protection(order_book, "BUY", price)
@@ -580,7 +600,16 @@ class SoloMarketMonitor:
             if abs(new_price - order.price) < 0.00001 and reason != "保护不足":
                 return True
 
-            logger.info(f"触发调整({reason}): {order.price:.4f}(买{current_rank}) -> {new_price:.4f}(买{new_rank})")
+            # 打印前10档盘口信息，辅助观察
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            logger.info(f"[{order.title[:30]}] 触发调整 - 市场深度 (前10档):")
+            cumulative_total = 0.0
+            for i, level in enumerate(order_book.bids[:10]):
+                cumulative_total += level.total
+                logger.info(f"   买{i+1}: {level.price:.4f} (本档: ${level.total:.0f} | 累计保护: ${cumulative_total:.0f})")
+            logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+
+            logger.info(f"执行调整({reason}): {order.price:.4f}(买{current_rank}) -> {new_price:.4f}(买{new_rank})")
             
             # 撤销旧单
             success = self.trader.cancel_order(order.order_id)
