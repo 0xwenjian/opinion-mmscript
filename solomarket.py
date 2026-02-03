@@ -212,38 +212,26 @@ class SoloMarketMonitor:
         
         逻辑:
         1. 遍历订单簿
-        2. 找到第一个满足 Cumulative_Protection >= min_protection_amount 的档位 i
-        3. 如果 i+1 > max_rank，说明位置太靠后了
-        4. 价格策略:
-           - 如果 i+1 == 1 (买1满足保护): 挂单价格 = level_1.price - 0.001
-           - 如果 i+1 > 1: 挂单价格 = level_i.price (匹配该档位)
+        2. 累加各档位金额，找到第一个满足累计金额 >= min_protection 的档位 i
+        3. 挂单价格 = level[i].price - 0.001 (躲在该档位后面)
+        4. 预估档位 = i + 2
         """
         if not order_book or not order_book.bids:
             return None
         
-        cumulative_protection = 0.0
+        cumulative_total = 0.0
         for i, level in enumerate(order_book.bids):
-            rank = i + 1
-            if max_rank and rank > max_rank:
+            estimated_rank = i + 2
+            
+            # 如果指定了最大档位限制，超出则停止搜索
+            if max_rank and estimated_rank > max_rank:
                 break
                 
-            cumulative_protection += level.total
-            
-            # 极度保守策略：只有更高价位的挂单才算保护
-            # 我们不信任同价位的挂单（level.total），因为它们可能撤单，或者我们在队列中变前
-            prev_protection = cumulative_protection - level.total
-            
-            if prev_protection >= self.min_protection:
-                # 找到了安全位置
-                # 注意：在这种逻辑下，rank=1 (i=0) 永远不可能触发 (prev=0)，
-                # 除非 min_protection 设置为 0。这符合"绝不当出头鸟"的原则。
-                
-                # 直接匹配该档位价格
-                # (不再尝试在买1前插队 -0.001，因为我们根本不会选买1)
-                target_price = level.price
-                
+            cumulative_total += level.total
+            if cumulative_total >= self.min_protection:
+                target_price = level.price - 0.001
                 if target_price < 0.01: target_price = 0.01
-                return round(target_price, 4), rank
+                return round(target_price, 4), estimated_rank
         
         return None
     
@@ -254,12 +242,11 @@ class SoloMarketMonitor:
             if topic_id not in self.market_info:
                 market_info = self.trader.get_market_by_topic_id(topic_id)
                 if not market_info:
-                    logger.error(f"无法获取市场 {topic_id} 信息（可能是多选市场）")
+                    logger.error(f"无法获取市场 {topic_id} 信息")
                     return False
                 
-                # 验证是否为二元市场（必须有 yes_token_id 和 no_token_id）
-                if not market_info.get('yes_token_id') or not market_info.get('no_token_id'):
-                    logger.warning(f"市场 {topic_id} 不是二元市场，跳过")
+                if not market_info.get('yes_token_id'):
+                    logger.warning(f"市场 {topic_id} 缺少 YES TOKEN，跳过")
                     return False
                 
                 self.market_info[topic_id] = market_info
@@ -274,17 +261,14 @@ class SoloMarketMonitor:
                 logger.warning(f"无法获取市场 {topic_id} 订单簿")
                 return False
             
-            # 尝试在 max_rank 内寻找安全价格
-            calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
-            
-            if not calc_res:
-                logger.info(f"无法在限制档位 {self.max_rank} 内找到安全价格，尝试在全球范围内寻找...")
-                calc_res = self.calculate_safe_price(order_book, max_rank=None) # 全球搜索
+            # 初始下单直接进行全局搜索 (不设 max_rank)
+            # 如果下单位置超过了 max_rank，则由 check_and_adjust_order 的触发器 B 负责后续回归
+            calc_res = self.calculate_safe_price(order_book, max_rank=None)
             
             if not calc_res:
                 logger.warning(f"在全球范围内亦无法找到满足 ${self.min_protection} 保护的安全价格")
                 
-                # 发送 TG 通知 (仅在完全找不到安全位置时)
+                # 发送 TG 通知
                 proxy_config = self.config.get('proxy', {})
                 proxy = None
                 if proxy_config.get('enabled'):
