@@ -79,6 +79,32 @@ class MockTrader:
         logger.debug(f"[MockTrader] 撤单: {order_id}")
         return True
 
+    def set_mock_order_status(self, order_id: str, status: any, filled_amount: float = 0.0):
+        """设置模拟订单的状态和成交金额"""
+        self.orders[order_id] = {
+            "status": status,
+            "filled_amount": filled_amount
+        }
+
     def check_order_status(self, order_id):
-        # 模拟模式下，订单永远是活跃的（不会被成交）
-        return type('Obj', (object,), {'status': 'open', 'result': None})
+        """查询模拟订单状态"""
+        order_info = self.orders.get(order_id, {"status": "open", "filled_amount": 0.0})
+        
+        # 构造符合 SDK 结构的返回对象
+        class OrderData:
+            def __init__(self, status, filled_amount):
+                self.status = status
+                self.filled_amount = filled_amount
+        
+        class Result:
+            def __init__(self, data):
+                self.order_data = data
+        
+        class Response:
+            def __init__(self, res):
+                self.result = res
+                self.status = res.order_data.status # 兼容层
+        
+        data = OrderData(order_info["status"], order_info["filled_amount"])
+        res = Result(data)
+        return Response(res)

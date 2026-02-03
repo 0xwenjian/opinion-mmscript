@@ -16,6 +16,7 @@ import sys
 import time
 import yaml
 import requests
+import traceback
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 from loguru import logger
@@ -92,6 +93,7 @@ class SoloMarketMonitor:
             self.fetcher = MockFetcher(self)
             self.trader = MockTrader()
             self.trader.set_fetcher(self.fetcher)
+            self.wallet_address = "MOCK_WALLET_ADDRESS"
         else:
             self.fetcher = OpinionFetcher(private_key=private_key, proxy=proxy, apikey=apikey)
             self.trader = OpinionTraderSDK(
@@ -101,6 +103,7 @@ class SoloMarketMonitor:
                 rpc_url=rpc_url,
                 proxy=proxy,
             )
+            self.wallet_address = self.trader.wallet_address
         
         # 订单跟踪
         self.orders: Dict[int, SoloMarketOrder] = {}
@@ -117,6 +120,22 @@ class SoloMarketMonitor:
         logger.info(f"最小保护金额: ${self.min_protection}")
         logger.info(f"挂单金额: ${self.order_amount}")
         logger.info(f"挂单档位限制: {self.max_rank}")
+        
+    def _send_tg(self, message: str):
+        """发送带钱包地址的 Telegram 通知"""
+        proxy_config = self.config.get('proxy', {})
+        proxy = None
+        if proxy_config.get('enabled'):
+            proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
+            
+        addr_short = f"{self.wallet_address[:6]}...{self.wallet_address[-4:]}"
+        footer = f"\n━━━━━━━━━━━━━━━\n👤 钱包: <code>{addr_short}</code>"
+        
+        # 避免重复添加 footer
+        if footer not in message:
+            message += footer
+            
+        send_tg_notification(message, proxy)
     
     def fetch_orderbook(self, topic_id: int, token_id: str) -> Optional[OrderBook]:
         """获取订单簿"""
@@ -268,19 +287,13 @@ class SoloMarketMonitor:
             if not calc_res:
                 logger.warning(f"在全球范围内亦无法找到满足 ${self.min_protection} 保护的安全价格")
                 
-                # 发送 TG 通知
-                proxy_config = self.config.get('proxy', {})
-                proxy = None
-                if proxy_config.get('enabled'):
-                    proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
-                
                 msg = f"""⚠️ <b>无法找到安全挂单位置</b>
 ━━━━━━━━━━━━━━━
 📌 市场: {title[:40]}
 💰 最小保护: <code>${self.min_protection}</code>
 ━━━━━━━━━━━━━━━
 当前订单簿深度不足以满足保护要求，下单已跳过！"""
-                send_tg_notification(msg, proxy)
+                self._send_tg(msg)
                 
                 return False
             
@@ -368,34 +381,42 @@ class SoloMarketMonitor:
             try:
                 order_status = self.trader.check_order_status(order.order_id)
                 if order_status:
-                    # API 返回的是对象，不是字典
+                    # 获取状态和成交金额
                     status = getattr(order_status, 'status', None)
+                    filled_amount = 0.0
+                    
                     if hasattr(order_status, 'result') and order_status.result:
                         result_data = order_status.result
                         if hasattr(result_data, 'order_data'):
-                            status = getattr(result_data.order_data, 'status', None)
+                            order_data = result_data.order_data
+                            status = getattr(order_data, 'status', status)
+                            # 尝试获取成交金额 (兼容多种可能的字段名)
+                            filled_amount = float(
+                                getattr(order_data, 'filled_amount', 0) or 
+                                getattr(order_data, 'executed_amount', 0) or
+                                getattr(order_data, 'filledAmount', 0) or
+                                0
+                            )
                     
-                    # 检查是否已成交 (status=3 表示已成交)
-                    if status in [3, '3', 'filled', 'FILLED']:
+                    # 只要有成交金额，就认作成交（解决部分成交后状态变为 canceled 的漏洞）
+                    if filled_amount > 0:
+                        is_partial = (status not in [3, '3', 'filled', 'FILLED'])
+                        status_str = "部分成交" if is_partial else "全额成交"
+                        
                         duration = int(time.time() - order.create_time)
-                        logger.warning(f"⚠️ [非预期成交] {order.title[:30]} @ {order.price:.4f} | 金额: ${order.amount} | 时长: {duration}s")
+                        logger.warning(f"⚠️ [{status_str}] {order.title[:30]} @ {order.price:.4f} | 成交: ${filled_amount}/{order.amount} | 状态: {status} | 时长: {duration}s")
                         
-                        # 发送 TG 通知
-                        proxy_config = self.config.get('proxy', {})
-                        proxy = None
-                        if proxy_config.get('enabled'):
-                            proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
-                        
-                        msg = f"""⚠️ <b>非预期成交</b>
+                        msg = f"""⚠️ <b>{status_str}</b>
 ━━━━━━━━━━━━━━━
 📌 市场: {order.title[:40]}
 📊 方向: BUY YES
-💰 价格: <code>{order.price:.4f}</code>
-💵 金额: <code>${order.amount}</code>
+💰 挂单价格: <code>{order.price:.4f}</code>
+💵 成交金额: <code>${filled_amount} / ${order.amount}</code>
+⚙️ 最终状态: <code>{status}</code>
 ⏰ 挂单时长: <code>{duration}秒</code>
 ━━━━━━━━━━━━━━━
-请检查市场状况！"""
-                        send_tg_notification(msg, proxy)
+请检查持仓！"""
+                        self._send_tg(msg)
                         
                         del self.orders[topic_id]
                         return False
@@ -550,7 +571,7 @@ class SoloMarketMonitor:
 ━━━━━━━━━━━━━━━
 ⏰ 报告时间: {time.strftime('%Y-%m-%d %H:%M:%S')}"""
             
-            send_tg_notification(msg, proxy)
+            self._send_tg(msg)
             logger.info("已发送状态报告到 Telegram")
             
         except Exception as e:
@@ -686,7 +707,13 @@ def main():
     monitor = SoloMarketMonitor(config)
     
     # 运行
-    monitor.run()
+    try:
+        monitor.run()
+    except Exception as e:
+        error_msg = f"❌ <b>脚本致命错误</b>\n\n<code>{str(e)}</code>\n\n<pre>{traceback.format_exc()[-500:]}</pre>"
+        monitor._send_tg(error_msg)
+        logger.critical(f"脚本致命错误: {e}")
+        raise e
 
 
 if __name__ == '__main__':
