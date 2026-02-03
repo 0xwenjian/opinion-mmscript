@@ -7,46 +7,6 @@ proxy:
   http: ""
   https: ""
 
-# 市场筛选条件
-market_filter:
-  # 最小交易量 (USD) - 高流动性市场价差更小
-  min_volume: 100000
-  # 价格范围 - 胜率60%-80%的市场
-  min_price: 0.60
-  max_price: 0.80
-
-# 交易策略配置
-strategy:
-  # 交易方向: YES 或 NO
-  outcome: "YES"
-  # 每次交易金额 (USD)
-  amount: 10.0
-  # 循环间隔 (秒)
-  interval: 1.0
-  # 每日目标交易量 (USD)
-  daily_target: 4000.0
-
-# 刷量策略配置
-volume_strategy:
-  # 最低胜率 (价格) - 只下注>90%胜率
-  min_win_price: 0.90
-  # 最高胜率 (价格)
-  max_win_price: 0.99
-  # 最大买卖价差 - 只下注价差<=0.01的市场
-  max_spread: 0.01
-  # 止盈百分比 - 上涨多少卖出
-  take_profit_pct: 0.01
-  # 止损百分比 - 下跌多少止损
-  stop_loss_pct: 0.03
-  # 每次下单金额 (USD)
-  bet_amount: 50.0
-  # 最大同时持仓数
-  max_positions: 5
-  # 最小交易量筛选
-  min_volume: 10000
-  # 持仓超时 (秒)
-  position_timeout: 3600
-
 # 做市刷积分策略配置 (新)
 maker_strategy:
   # 最小前方保护金额 (USD) - 确保前方有足够挂单保护
@@ -78,11 +38,6 @@ solo_market:
 # 日志配置
 logging:
   level: INFO
-
-# Telegram 通知配置
-telegram:
-  bot_token: "8544750989:AAHPsUmnmFE9jXOeDxVeZHbNdApd1Vbnc9Y"
-  chat_id: "1986441477"
 
   # caffeinate -i -s python3 main.py
   # python3 find_markets.py
