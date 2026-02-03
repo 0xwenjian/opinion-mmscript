@@ -57,6 +57,13 @@ def load_config():
         config["proxy"]["http"] = os.getenv("PROXY_HTTP")
     if os.getenv("PROXY_HTTPS"):
         config["proxy"]["https"] = os.getenv("PROXY_HTTPS")
+
+    # 加载 Telegram 配置
+    if "telegram" not in config:
+        config["telegram"] = {}
+    
+    config["telegram"]["bot_token"] = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("telegram_bot_token") or config["telegram"].get("bot_token", "")
+    config["telegram"]["chat_id"] = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("telegram_chat_id") or config["telegram"].get("chat_id", "")
     
     return config
 

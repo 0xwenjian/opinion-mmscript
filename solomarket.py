@@ -60,14 +60,21 @@ class SoloMarketMonitor:
         self.order_amount = solo_config.get('order_amount', 50.0)
         self.max_rank = solo_config.get('check_bid_position', 10) # 挂单最大档位限制
         
-        # 加载 Telegram 配置
+        # 加载环境变量
+        load_dotenv()
+        
+        # 加载 Telegram 配置 (优先从 .env 加载)
         global TG_BOT_TOKEN, TG_CHAT_ID
-        tg_config = config.get('telegram', {})
-        TG_BOT_TOKEN = tg_config.get('bot_token', '')
-        TG_CHAT_ID = tg_config.get('chat_id', '')
+        TG_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN') or os.getenv('telegram_bot_token')
+        TG_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID') or os.getenv('telegram_chat_id')
+        
+        # 如果 .env 没写，再看 config.yaml (兼容性处理)
+        if not TG_BOT_TOKEN or not TG_CHAT_ID:
+            tg_config = config.get('telegram', {})
+            TG_BOT_TOKEN = TG_BOT_TOKEN or tg_config.get('bot_token', '')
+            TG_CHAT_ID = TG_CHAT_ID or tg_config.get('chat_id', '')
         
         # 初始化 fetcher 和 trader
-        load_dotenv()
         private_key = os.getenv('OPINION_PRIVATE_KEY')
         apikey = os.getenv('OPINION_APIKEY')
         wallet_address = os.getenv('OPINION_WALLET_ADDRESS')
@@ -104,6 +111,8 @@ class SoloMarketMonitor:
                 proxy=proxy,
             )
             self.wallet_address = self.trader.wallet_address
+            
+        self.wallet_alias = os.getenv('OPINION_WALLET_ALIAS', '')
         
         # 订单跟踪
         self.orders: Dict[int, SoloMarketOrder] = {}
@@ -128,8 +137,13 @@ class SoloMarketMonitor:
         if proxy_config.get('enabled'):
             proxy = {'http': proxy_config.get('http'), 'https': proxy_config.get('https')}
             
-        addr_short = f"{self.wallet_address[:6]}...{self.wallet_address[-4:]}"
-        footer = f"\n━━━━━━━━━━━━━━━\n👤 钱包: <code>{addr_short}</code>"
+        if self.wallet_alias:
+            user_label = f"🏷️ 别名: <b>{self.wallet_alias}</b>"
+        else:
+            addr_short = f"{self.wallet_address[:6]}...{self.wallet_address[-4:]}"
+            user_label = f"👤 钱包: <code>{addr_short}</code>"
+            
+        footer = f"\n━━━━━━━━━━━━━━━\n{user_label}"
         
         # 避免重复添加 footer
         if footer not in message:
