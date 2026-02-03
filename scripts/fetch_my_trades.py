@@ -6,19 +6,30 @@ import json
 from loguru import logger
 from dotenv import load_dotenv
 
-# 将当前目录添加到模块搜索路径
-sys.path.append(os.getcwd())
+from pathlib import Path
+root_dir = Path(__file__).parent.parent
+sys.path.append(str(root_dir))
 
 from modules.trader_opinion_sdk import OpinionTraderSDK
 
 def load_config():
-    if os.path.exists('config.yaml'):
-        with open('config.yaml', 'r') as f:
-            return yaml.safe_load(f)
+    config_paths = [root_dir / "config.yaml"]
+    config_paths.extend(list((root_dir / "accounts").glob("*/config.yaml")))
+    for p in config_paths:
+        if p.exists():
+            with open(p, 'r') as f:
+                return yaml.safe_load(f)
     return {}
 
 def main():
-    load_dotenv()
+    # 尝试加载环境变量 (多路径支持)
+    env_paths = [root_dir / ".env"]
+    env_paths.extend(list((root_dir / "accounts").glob("*/.env")))
+    for p in env_paths:
+        if p.exists():
+            load_dotenv(p)
+            break
+            
     config = load_config()
 
     print("=== 开始获取我的交易历史/订单 ===")

@@ -19,12 +19,25 @@ import sys
 import argparse
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
 
-from dotenv import load_dotenv
-load_dotenv('.env')
+# 尝试加载环境变量 (多路径支持)
+env_paths = [
+    root_dir / ".env",
+    root_dir / "accounts/acc1/.env"
+]
+# 自动搜索 accounts 下的第一个 .env
+env_paths.extend(list((root_dir / "accounts").glob("*/.env")))
 
-from modules.trader_opinion_sdk import OpinionTraderSDK
+env_loaded = False
+for p in env_paths:
+    if p.exists():
+        load_dotenv(p)
+        print(f"已加载环境变量: {p}")
+        env_loaded = True
+        break
 
 trader = OpinionTraderSDK(
     private_key=os.getenv('OPINION_PRIVATE_KEY', ''),

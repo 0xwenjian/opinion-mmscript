@@ -18,11 +18,9 @@
 
 ### 📚 文档说明 (`docs/`)
 - **`solomarket说明.md`**: 详细拆解了 `solomarket.py` 的“买1插队”逻辑和自动补位触发器。
-- **`fill_detection_optimization.md`**: 针对部分成交/撤单后成交逻辑的优化技术说明。
 
 ### 🧪 测试与开发 (`test/`)
 - 包含模拟器（Simulation）、订单簿解析、以及下单逻辑的单元测试脚本。
-
 ---
 
 ## 🚀 快速开始
@@ -30,8 +28,7 @@
 ### 1. 环境准备
 确保已安装依赖：
 ```bash
-pip install -r requirements.txt  # 如果有
-# 或手动安装核心包
+
 pip install opinion-clob-sdk loguru pyyaml requests python-dotenv
 ```
 
@@ -51,9 +48,19 @@ python3 scripts/find_markets.py
 将输出的 ID 填入 `config.yaml` 的 `topic_ids` 列表中。
 
 ### 4. 运行机器人
-启动单市场监控策略（支持多个 topic 并发）：
+
+#### 方式 A：单账号启动
+直接运行主脚本：
 ```bash
 python3 solomarket.py
+```
+
+#### 方式 B：多账号一键启动 (Windows/Mac 通用)
+1. 在 `accounts/` 目录下为每个账号创建文件夹（如 `acc1`, `acc2`）。
+2. 在每个文件夹内存放该账号独立的 `.env` 和 `config.yaml`。
+3. 运行通用启动器：
+```bash
+python3 scripts/run_multi.py
 ```
 
 ---

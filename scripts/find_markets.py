@@ -9,8 +9,13 @@
 import os
 import sys
 import yaml
+from pathlib import Path
 from dotenv import load_dotenv
 from loguru import logger
+
+# 添加项目根目录到 sys.path
+root_dir = Path(__file__).parent.parent
+sys.path.append(str(root_dir))
 
 from modules.fetch_opinion import OpinionFetcher
 from modules.trader_opinion_sdk import OpinionTraderSDK
@@ -21,10 +26,37 @@ def main():
     logger.remove()
     logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
     
-    # 加载配置
-    load_dotenv()
-    with open('config.yaml', 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    # 加载环境变量 (尝试多个路径)
+    env_paths = [
+        root_dir / ".env",
+        root_dir / "accounts/acc1/.env"  # 尝试常用路径
+    ]
+    # 自动搜索 accounts 下的第一个 .env
+    acc_envs = list((root_dir / "accounts").glob("*/.env"))
+    env_paths.extend(acc_envs)
+    
+    env_loaded = False
+    for p in env_paths:
+        if p.exists():
+            load_dotenv(p)
+            logger.info(f"已加载环境变量: {p}")
+            env_loaded = True
+            break
+    
+    if not env_loaded:
+        logger.warning("未找到任何 .env 文件，将尝试使用系统环境变量")
+    
+    # 尝试加载配置（主要是为了获取代理）
+    config = {}
+    config_paths = [root_dir / "config.yaml"]
+    config_paths.extend(list((root_dir / "accounts").glob("*/config.yaml")))
+    
+    for p in config_paths:
+        if p.exists():
+            with open(p, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                logger.debug(f"已加载配置: {p}")
+                break
     
     private_key = os.getenv('OPINION_PRIVATE_KEY')
     apikey = os.getenv('OPINION_APIKEY')

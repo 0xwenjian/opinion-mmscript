@@ -60,7 +60,7 @@ class SoloMarketMonitor:
         self.order_amount = solo_config.get('order_amount', 50.0)
         self.max_rank = solo_config.get('check_bid_position', 10) # 挂单最大档位限制
         
-        # 加载环境变量
+        # 加载环境变量 (main中已经加载过一次，这里确保同步)
         load_dotenv()
         
         # 加载 Telegram 配置 (优先从 .env 加载)
@@ -687,10 +687,19 @@ class SoloMarketMonitor:
 
 
 def main():
-    # 配置日志
+    # 解析命令行参数
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sim", action="store_true", help="运行模拟模式")
+    parser.add_argument("--config", type=str, default="config.yaml", help="配置文件路径")
+    parser.add_argument("--env", type=str, default=".env", help="环境变量文件路径")
+    args = parser.parse_args()
+
+    # 配置日志 (使用配置名区分日志文件)
+    config_name = os.path.splitext(os.path.basename(args.config))[0]
     logger.remove()
     logger.add(
-        "log/solo_market_{time:YYYY-MM-DD_HH-mm-ss}.txt",
+        f"log/solo_{config_name}_{{time:YYYY-MM-DD_HH-mm-ss}}.txt",
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level} | {message}",
         level="INFO",
         rotation="10 MB",
@@ -701,14 +710,13 @@ def main():
         level="DEBUG",
     )
     
-    # 解析命令行参数
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--sim", action="store_true", help="运行模拟模式")
-    args = parser.parse_args()
+    # 强制先加载指定的 .env
+    if os.path.exists(args.env):
+        load_dotenv(args.env, override=True)
+        logger.info(f"已加载环境变量: {args.env}")
 
     # 加载配置
-    with open('config.yaml', 'r', encoding='utf-8') as f:
+    with open(args.config, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
     if args.sim:

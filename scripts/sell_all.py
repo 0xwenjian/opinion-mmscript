@@ -10,10 +10,12 @@ import sys
 import time
 from datetime import datetime, timezone
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
 
 from dotenv import load_dotenv
-load_dotenv('.env')
+load_dotenv(root_dir / ".env")
 
 from modules.trader_opinion_sdk import OpinionTraderSDK
 
