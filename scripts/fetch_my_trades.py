@@ -12,25 +12,36 @@ sys.path.append(str(root_dir))
 
 from modules.trader_opinion_sdk import OpinionTraderSDK
 
-def load_config():
-    config_paths = [root_dir / "config.yaml"]
-    config_paths.extend(list((root_dir / "accounts").glob("*/config.yaml")))
+def load_config(config_file="config.yaml"):
+    config_paths = [config_file, root_dir / "config.yaml"]
+    config_paths.extend(list(root_dir.glob("account_*.config.yaml")))
     for p in config_paths:
-        if p.exists():
-            with open(p, 'r') as f:
+        p_path = Path(p)
+        if p_path.exists():
+            with open(p_path, 'r') as f:
                 return yaml.safe_load(f)
     return {}
 
 def main():
-    # 尝试加载环境变量 (多路径支持)
-    env_paths = [root_dir / ".env"]
-    env_paths.extend(list((root_dir / "accounts").glob("*/.env")))
-    for p in env_paths:
-        if p.exists():
-            load_dotenv(p)
-            break
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env-file", type=str, default=".env")
+    parser.add_argument("--config-file", type=str, default="config.yaml")
+    args = parser.parse_args()
+
+    # 加载环境变量
+    if os.path.exists(args.env_file):
+        load_dotenv(args.env_file, override=True)
+    else:
+        # 退路逻辑
+        env_paths = [root_dir / ".env"]
+        env_paths.extend(list(root_dir.glob("account_*.env")))
+        for p in env_paths:
+            if p.exists():
+                load_dotenv(p)
+                break
             
-    config = load_config()
+    config = load_config(args.config_file)
 
     print("=== 开始获取我的交易历史/订单 ===")
     

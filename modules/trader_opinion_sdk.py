@@ -320,6 +320,35 @@ class OpinionTraderSDK:
             logger.error(f"取消订单异常: {e}")
             return False
 
+    def cancel_all_orders(self) -> bool:
+        """取消账户下所有未成交订单 (三重保险版)"""
+        try:
+            success = True
+            # 1. 尝试全局撤单
+            logger.info("正在调用 SDK 全局撤单 API...")
+            res = self.client.cancel_all_orders()
+            
+            # 2. 获取当前账户所有挂单，进行二次确认/手动清理
+            # 这样可以确保即使全局 API 漏掉了某些单子也能清空
+            remains = self.get_my_orders()
+            if remains and len(remains) > 0:
+                logger.warning(f"检测到仍然存在 {len(remains)} 个残余订单，开始手工清理...")
+                for order in remains:
+                    order_id = getattr(order, 'order_id', None) or getattr(order, 'id', None)
+                    if order_id:
+                        if self.client.cancel_order(order_id):
+                            logger.info(f"成功清理残余订单: {order_id}")
+                        else:
+                            logger.error(f"清理残余订单失败: {order_id}")
+                            success = False
+            
+            if success:
+                logger.success("该账号下所有订单已清理完毕")
+            return success
+        except Exception as e:
+            logger.error(f"批量撤单过程发生异常: {e}")
+            return False
+
     def get_order_status(self, order_id: str) -> Optional[Dict]:
         """查询订单状态"""
         try:

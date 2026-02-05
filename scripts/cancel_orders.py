@@ -17,34 +17,38 @@
 import os
 import sys
 import argparse
+from typing import Optional, Dict, List
 from datetime import datetime, timezone
 
 from pathlib import Path
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-# 尝试加载环境变量 (多路径支持)
-env_paths = [
-    root_dir / ".env",
-    root_dir / "accounts/acc1/.env"
-]
-# 自动搜索 accounts 下的第一个 .env
-env_paths.extend(list((root_dir / "accounts").glob("*/.env")))
+from modules.trader_opinion_sdk import OpinionTraderSDK
 
-env_loaded = False
-for p in env_paths:
-    if p.exists():
-        load_dotenv(p)
-        print(f"已加载环境变量: {p}")
-        env_loaded = True
-        break
+trader: Optional[OpinionTraderSDK] = None
 
-trader = OpinionTraderSDK(
-    private_key=os.getenv('OPINION_PRIVATE_KEY', ''),
-    wallet_address=os.getenv('OPINION_WALLET_ADDRESS', ''),
-    apikey=os.getenv('OPINION_APIKEY', ''),
-    rpc_url=os.getenv('OPINION_RPC_URL', 'https://binance.llamarpc.com'),
-)
+def setup_trader(env_file=".env"):
+    global trader
+    if os.path.exists(env_file):
+        load_dotenv(env_file, override=True)
+        print(f"已加载环境变量: {env_file}")
+    else:
+        # 退路逻辑
+        env_paths = [root_dir / ".env"]
+        env_paths.extend(list(root_dir.glob("account_*.env")))
+        for p in env_paths:
+            if p.exists():
+                load_dotenv(p)
+                print(f"自动加载环境变量: {p}")
+                break
+    
+    trader = OpinionTraderSDK(
+        private_key=os.getenv('OPINION_PRIVATE_KEY', ''),
+        wallet_address=os.getenv('OPINION_WALLET_ADDRESS', ''),
+        apikey=os.getenv('OPINION_APIKEY', ''),
+        rpc_url=os.getenv('OPINION_RPC_URL', 'https://binance.llamarpc.com'),
+    )
 
 
 def parse_order_time(created_at):
@@ -180,8 +184,10 @@ def main():
     parser.add_argument('--hours', type=float, default=3, help='取消超过指定小时数的订单 (默认: 3)')
     parser.add_argument('--id', type=str, help='取消指定订单ID')
     parser.add_argument('--list', action='store_true', help='仅列出订单，不取消')
+    parser.add_argument('--env-file', type=str, default='.env', help='环境变量文件路径')
     
     args = parser.parse_args()
+    setup_trader(args.env_file)
     
     if args.list:
         list_orders()

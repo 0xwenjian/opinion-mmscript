@@ -55,13 +55,11 @@ python3 scripts/find_markets.py
 python3 solomarket.py
 ```
 
-#### 方式 B：多账号一键启动 (Windows/Mac 通用)
-1. 在 `accounts/` 目录下为每个账号创建文件夹（如 `acc1`, `acc2`）。
-2. 在每个文件夹内存放该账号独立的 `.env` 和 `config.yaml`。
-3. 运行通用启动器：
-```bash
-python3 scripts/run_multi.py
-```
+#### 方式 B：多账号启动
+你可以为不同的账号准备不同的环境和配置文件，例如：
+- 账号1: `python3 solomarket.py --env-file account_1.env --config-file account_1.config.yaml`
+- 账号2: `python3 solomarket.py --env-file account_2.env --config-file account_2.config.yaml`
+指令中的文件名可以根据你的实际需求自定义。
 
 ---
 

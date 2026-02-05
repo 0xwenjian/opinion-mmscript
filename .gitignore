@@ -7,4 +7,6 @@ log/
 .vscode/
 .idea/
 bug.md
-
+config.yaml
+account_*.env
+account_*.config.yaml

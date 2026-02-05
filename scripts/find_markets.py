@@ -22,40 +22,44 @@ from modules.trader_opinion_sdk import OpinionTraderSDK
 
 
 def main():
+    # 解析命令行参数
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--env-file", type=str, default=".env", help="环境变量文件路径")
+    parser.add_argument("--config-file", type=str, default="config.yaml", help="配置文件路径")
+    args = parser.parse_args()
+
     # 配置日志
     logger.remove()
     logger.add(sys.stderr, format="{time:HH:mm:ss} | {level} | {message}", level="INFO")
     
-    # 加载环境变量 (尝试多个路径)
-    env_paths = [
-        root_dir / ".env",
-        root_dir / "accounts/acc1/.env"  # 尝试常用路径
-    ]
-    # 自动搜索 accounts 下的第一个 .env
-    acc_envs = list((root_dir / "accounts").glob("*/.env"))
-    env_paths.extend(acc_envs)
-    
-    env_loaded = False
-    for p in env_paths:
-        if p.exists():
-            load_dotenv(p)
-            logger.info(f"已加载环境变量: {p}")
-            env_loaded = True
-            break
-    
-    if not env_loaded:
-        logger.warning("未找到任何 .env 文件，将尝试使用系统环境变量")
+    # 加载环境变量
+    if os.path.exists(args.env_file):
+        load_dotenv(args.env_file, override=True)
+        logger.info(f"已加载环境变量: {args.env_file}")
+    else:
+        # 尝试自动搜索逻辑作为退路
+        env_paths = [root_dir / ".env"]
+        env_paths.extend(list(root_dir.glob("account_*.env")))
+        env_paths.extend(list((root_dir / "accounts").glob("*/.env")))
+        
+        for p in env_paths:
+            if p.exists():
+                load_dotenv(p)
+                logger.info(f"自动加载环境变量: {p}")
+                break
     
     # 尝试加载配置（主要是为了获取代理）
     config = {}
-    config_paths = [root_dir / "config.yaml"]
-    config_paths.extend(list((root_dir / "accounts").glob("*/config.yaml")))
+    config_paths = [args.config_file, root_dir / "config.yaml"]
+    config_paths.extend(list(root_dir.glob("account_*.config.yaml")))
     
     for p in config_paths:
-        if p.exists():
-            with open(p, 'r', encoding='utf-8') as f:
+        p_path = Path(p)
+        if p_path.exists():
+            with open(p_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
-                logger.debug(f"已加载配置: {p}")
+                logger.debug(f"已加载配置: {p_path}")
                 break
     
     private_key = os.getenv('OPINION_PRIVATE_KEY')

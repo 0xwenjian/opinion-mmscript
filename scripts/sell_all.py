@@ -14,22 +14,34 @@ from pathlib import Path
 root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
-from dotenv import load_dotenv
-load_dotenv(root_dir / ".env")
+import argparse
+from typing import Optional
 
-from modules.trader_opinion_sdk import OpinionTraderSDK
+trader: Optional[OpinionTraderSDK] = None
+ORDER_TIMEOUT_HOURS = 3
+CHECK_INTERVAL_SECONDS = 60
 
-# 配置
-ORDER_TIMEOUT_HOURS = 3  # 订单超时时间（小时）
-CHECK_INTERVAL_SECONDS = 60  # 检查间隔（秒）
-MONITOR_MODE = '--monitor' in sys.argv  # 是否启用监控模式
-
-trader = OpinionTraderSDK(
-    private_key=os.getenv('OPINION_PRIVATE_KEY', ''),
-    wallet_address=os.getenv('OPINION_WALLET_ADDRESS', ''),
-    apikey=os.getenv('OPINION_APIKEY', ''),
-    rpc_url=os.getenv('OPINION_RPC_URL', 'https://binance.llamarpc.com'),
-)
+def setup_trader(env_file=".env"):
+    global trader
+    if os.path.exists(env_file):
+        load_dotenv(env_file, override=True)
+        print(f"已加载环境变量: {env_file}")
+    else:
+        # 退路逻辑
+        env_paths = [root_dir / ".env"]
+        env_paths.extend(list(root_dir.glob("account_*.env")))
+        for p in env_paths:
+            if p.exists():
+                load_dotenv(p)
+                print(f"自动加载环境变量: {p}")
+                break
+    
+    trader = OpinionTraderSDK(
+        private_key=os.getenv('OPINION_PRIVATE_KEY', ''),
+        wallet_address=os.getenv('OPINION_WALLET_ADDRESS', ''),
+        apikey=os.getenv('OPINION_APIKEY', ''),
+        rpc_url=os.getenv('OPINION_RPC_URL', 'https://binance.llamarpc.com'),
+    )
 
 
 def cancel_expired_orders():
@@ -160,6 +172,21 @@ def monitor_orders():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='卖出所有持仓脚本')
+    parser.add_argument('--monitor', action='store_true', help='开启监控模式，自动取消超时订单')
+    parser.add_argument('--hours', type=float, default=3, help='订单超时时间 (小时, 默认: 3)')
+    parser.add_argument('--interval', type=int, default=60, help='检查间隔 (秒, 默认: 60)')
+    parser.add_argument('--env-file', type=str, default='.env', help='环境变量文件路径')
+    
+    args = parser.parse_args()
+    
+    global ORDER_TIMEOUT_HOURS, CHECK_INTERVAL_SECONDS
+    # 全局变量更新 (如果其他函数使用了它们)
+    ORDER_TIMEOUT_HOURS = args.hours
+    CHECK_INTERVAL_SECONDS = args.interval
+    
+    setup_trader(args.env_file)
+    
     # 先取消已超时的订单
     cancel_expired_orders()
     
@@ -169,5 +196,5 @@ if __name__ == '__main__':
     print('完成')
     
     # 如果启用监控模式，持续检查并取消超时订单
-    if MONITOR_MODE:
+    if args.monitor:
         monitor_orders()

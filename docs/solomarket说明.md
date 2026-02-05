@@ -212,3 +212,9 @@
 - 从监控列表中移除该订单
 
 ----
+
+#### 多账号启动
+你可以为不同的账号准备不同的环境和配置文件，例如：
+- 账号1: `python3 solomarket.py --env-file account_1.env --config-file account_1.config.yaml`
+- 账号2: `python3 solomarket.py --env-file account_2.env --config-file account_2.config.yaml`
+指令中的文件名可以根据你的实际需求自定义。

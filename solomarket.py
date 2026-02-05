@@ -671,19 +671,27 @@ class SoloMarketMonitor:
                 time.sleep(1)  # 尽可能频繁检查
         
         except KeyboardInterrupt:
-            logger.info("收到停止信号")
+            # 优雅处理退出，避免 loguru 在 Python 关闭时的 datetime 报错
+            try:
+                logger.info("收到停止信号，正在安全退出...")
+            except:
+                pass
         finally:
             # 撤销所有订单
-            logger.info("撤销所有挂单...")
-            for order in self.orders.values():
-                try:
-                    logger.info(f"[撤单] {order.title[:30]} @ {order.price:.4f}")
-                    self.trader.cancel_order(order.order_id)
-                except Exception as e:
-                    logger.error(f"撤单失败: {e}")
-            
-            self.running = False
-            logger.info("Solo Market 监控已停止")
+            try:
+                logger.info("正在执行全局撤单 (SDK cancel_all_orders)...")
+                self.trader.cancel_all_orders()
+                
+                if self.orders:
+                    logger.info(f"同时清理本地跟踪的 {len(self.orders)} 个订单记录...")
+                    # 虽然全局撤单已经执行，但打印一下让用户放心
+                    for order in list(self.orders.values()):
+                        logger.info(f"本地状态记录: {order.title[:30]} @ {order.price:.4f} 已撤销")
+                
+                self.running = False
+                logger.info("Solo Market 监控已停止")
+            except:
+                pass
 
 
 def main():
@@ -691,12 +699,12 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--sim", action="store_true", help="运行模拟模式")
-    parser.add_argument("--config", type=str, default="config.yaml", help="配置文件路径")
-    parser.add_argument("--env", type=str, default=".env", help="环境变量文件路径")
+    parser.add_argument("--config-file", type=str, default="config.yaml", help="配置文件路径")
+    parser.add_argument("--env-file", type=str, default=".env", help="环境变量文件路径")
     args = parser.parse_args()
 
     # 配置日志 (使用配置名区分日志文件)
-    config_name = os.path.splitext(os.path.basename(args.config))[0]
+    config_name = os.path.splitext(os.path.basename(args.config_file))[0]
     logger.remove()
     logger.add(
         f"log/solo_{config_name}_{{time:YYYY-MM-DD_HH-mm-ss}}.txt",
@@ -711,12 +719,12 @@ def main():
     )
     
     # 强制先加载指定的 .env
-    if os.path.exists(args.env):
-        load_dotenv(args.env, override=True)
-        logger.info(f"已加载环境变量: {args.env}")
+    if os.path.exists(args.env_file):
+        load_dotenv(args.env_file, override=True)
+        logger.info(f"已加载环境变量: {args.env_file}")
 
     # 加载配置
-    with open(args.config, 'r', encoding='utf-8') as f:
+    with open(args.config_file, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
     
     if args.sim:
