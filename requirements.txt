@@ -1,0 +1,5 @@
+opinion-clob-sdk
+loguru
+pyyaml
+requests
+python-dotenv
