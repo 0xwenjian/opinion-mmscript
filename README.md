@@ -26,10 +26,26 @@
 ## 🚀 快速开始
 
 ### 1. 环境准备
-确保已安装依赖：
-```bash
+建议使用虚拟环境以确保依赖隔离：
 
-pip install opinion-clob-sdk loguru pyyaml requests python-dotenv
+**Mac / Linux:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Windows:**
+```bash
+# 1. 创建虚拟环境
+python -m venv venv
+
+# 2. 激活虚拟环境 (根据你的终端类型选择)
+.\venv\Scripts\activate.ps1      # 如果是 PowerShell (推荐)
+venv\Scripts\activate            # 如果是 CMD
+
+# 3. 安装依赖
+pip install -r requirements.txt
 ```
 
 ### 2. 配置账户

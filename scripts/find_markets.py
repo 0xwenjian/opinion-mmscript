@@ -65,6 +65,16 @@ def main():
     private_key = os.getenv('OPINION_PRIVATE_KEY')
     apikey = os.getenv('OPINION_APIKEY')
     
+    if not private_key:
+        logger.error("❌ 未找到私钥 (OPINION_PRIVATE_KEY)！")
+        logger.info("请通过 --env-file 指定环境文件，或者在根目录创建 .env 文件。")
+        logger.info("用法示例: python scripts/find_markets.py --env-file account_1.env")
+        return
+
+    if not apikey:
+        logger.error("❌ 未找到 APIKEY (OPINION_APIKEY)！")
+        return
+
     # 代理配置
     proxy_config = config.get('proxy', {})
     proxy = None
