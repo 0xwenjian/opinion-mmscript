@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 0xwenjian. Licensed under the Non-Commercial License.
 """
 Solo Market 监控脚本
 

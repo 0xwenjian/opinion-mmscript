@@ -123,6 +123,7 @@ def main():
                     "yes_price": yes_price,
                     "volume": volume,
                     "distance_to_half": abs(yes_price - 0.5),  # 计算与 0.5 的距离
+                    "token_id": market_info.get('yes_token_id'), # 记录 token_id 用于展示
                 })
                 logger.info(f"✓ {topic_id}: {market_info.get('title', '')[:50]} | Price: ${yes_price:.3f} | Vol: ${volume:,.0f}")
         except Exception as e:
@@ -138,7 +139,46 @@ def main():
     for i, m in enumerate(available_markets[:20], 1):
         distance_pct = m['distance_to_half'] * 100
         logger.info(f"{i}. {m['topic_id']} - {m['title']} | Price: ${m['yes_price']:.3f} (距0.5: {distance_pct:.1f}%) | Vol: ${m['volume']:,.0f}")
-    
+        
+        # 对前 5 名展示详情订单簿
+        if i <= 5 and m.get('token_id'):
+            try:
+                # 使用 SDK 的方法获取订单簿，这样最稳
+                ob_result = trader.client.get_orderbook(str(m['token_id']))
+                if ob_result and hasattr(ob_result, 'result'):
+                    res_data = ob_result.result
+                    data = res_data.data if hasattr(res_data, 'data') else res_data
+                    
+                    bids = getattr(data, 'bids', []) or []
+                    asks = getattr(data, 'asks', []) or []
+                    
+                    bids = bids[:5]
+                    asks = asks[:5]
+                    
+                    print(f"   --- 订单簿详情 (ID: {m['topic_id']}) ---")
+                    print(f"      {'Asks (卖单)':<20} | {'Bids (买单)':<20}")
+                    for idx in range(5):
+                        ask_str = "-"
+                        if idx < len(asks):
+                            ask = asks[idx]
+                            p = getattr(ask, 'price', 0)
+                            s = getattr(ask, 'size', 0) or getattr(ask, 'amount', 0)
+                            ask_str = f"{float(p):.4f} (${float(s):,.0f})"
+                        
+                        bid_str = "-"
+                        if idx < len(bids):
+                            bid = bids[idx]
+                            p = getattr(bid, 'price', 0)
+                            s = getattr(bid, 'size', 0) or getattr(bid, 'amount', 0)
+                            bid_str = f"{float(p):.4f} (${float(s):,.0f})"
+                        
+                        print(f"      {idx+1}. {ask_str:<17} | {idx+1}. {bid_str:<17}")
+                    print("-" * 50)
+                else:
+                    logger.warning(f"   (无法通过 SDK 获取市场 {m['topic_id']} 的订单簿数据)")
+            except Exception as e:
+                logger.debug(f"展示订单簿出错: {e}")
+
     logger.info(f"\n请将这些 ID 添加到 config.yaml 的 solo_market.topic_ids 中")
 
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# Copyright (c) 2026 0xwenjian. Licensed under the Non-Commercial License.
 """
 Opinion 做市刷积分机器人
 主入口文件

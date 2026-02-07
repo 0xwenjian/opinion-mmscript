@@ -1,5 +1,7 @@
 # Opinion 做市刷积分机器人
+
 ## Author [@0xwenjian](https://x.com/0xwenjian)
+
 本项目是一个专为 Opinion 平台设计的做市机器人，旨在通过提供市场流动性来赚取平台积分。
 
 ## 📂 项目结构
@@ -90,3 +92,11 @@ python3 solomarket.py
 
 ## ⚠️ 免责声明
 本工具仅用于技术交流和参加平台积分活动。做市交易存在风险，尤其是在极端波动行情下，请务必根据个人风险承受能力设置 `order_amount` 和 `min_protection_amount`。
+
+---
+
+## 📄 许可证 (License)
+
+Copyright © 2026 0xwenjian.
+本项目采用 [Non-Commercial License](LICENSE)（非商业用途许可证）。
+严禁任何形式的商业使用、转售或利用本项目牟利。
