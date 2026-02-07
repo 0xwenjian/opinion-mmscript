@@ -1,5 +1,5 @@
 # Opinion 做市刷积分机器人
-
+## Author [@0xwenjian](https://x.com/0xwenjian)
 本项目是一个专为 Opinion 平台设计的做市机器人，旨在通过提供市场流动性来赚取平台积分。
 
 ## 📂 项目结构
