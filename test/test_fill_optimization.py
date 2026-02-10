@@ -24,7 +24,6 @@ def test_fill_detection():
             'topic_ids': [1234],
             'min_protection_amount': 500,
             'order_amount': 100,
-            'check_bid_position': 5
         },
         'telegram': {
             'bot_token': '',

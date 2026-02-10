@@ -32,7 +32,6 @@ solo_market:
   min_protection_amount: 1111
   # 每次挂单金额 (USD)
   order_amount: 11
-  check_bid_position: 6 # 挂单的最大档位限制，超过此档位会触发向上补位逻辑
 
 
 # 日志配置

@@ -59,7 +59,7 @@ class SoloMarketMonitor:
         self.topic_ids = solo_config.get('topic_ids', [])
         self.min_protection = solo_config.get('min_protection_amount', 500.0)
         self.order_amount = solo_config.get('order_amount', 50.0)
-        self.max_rank = solo_config.get('check_bid_position', 10) # 挂单最大档位限制
+
         
         # 加载环境变量 (main中已经加载过一次，这里确保同步)
         load_dotenv()
@@ -129,7 +129,7 @@ class SoloMarketMonitor:
         logger.info(f"监控市场: {self.topic_ids}")
         logger.info(f"最小保护金额: ${self.min_protection}")
         logger.info(f"挂单金额: ${self.order_amount}")
-        logger.info(f"挂单档位限制: {self.max_rank}")
+        logger.info(f"订单簿检查间隔: 3秒")
         
     def _send_tg(self, message: str):
         """发送带钱包地址的 Telegram 通知"""
@@ -241,11 +241,11 @@ class SoloMarketMonitor:
                     break
         return rank, protection
     
-    def calculate_safe_price(self, order_book: OrderBook, max_rank: Optional[int] = None) -> Optional[tuple[float, int]]:
+    def calculate_safe_price(self, order_book: OrderBook) -> Optional[tuple[float, int]]:
         """计算安全挂单价格
         
         逻辑:
-        1. 遍历订单簿
+        1. 遍历整个订单簿
         2. 累加各档位金额，找到第一个满足累计金额 >= min_protection 的档位 i
         3. 挂单价格 = level[i].price - 0.001 (躲在该档位后面)
         4. 预估档位 = i + 2
@@ -256,11 +256,6 @@ class SoloMarketMonitor:
         cumulative_total = 0.0
         for i, level in enumerate(order_book.bids):
             estimated_rank = i + 2
-            
-            # 如果指定了最大档位限制，超出则停止搜索
-            if max_rank and estimated_rank > max_rank:
-                break
-                
             cumulative_total += level.total
             if cumulative_total >= self.min_protection:
                 target_price = level.price - 0.001
@@ -295,9 +290,8 @@ class SoloMarketMonitor:
                 logger.warning(f"无法获取市场 {topic_id} 订单簿")
                 return False
             
-            # 初始下单直接进行全局搜索 (不设 max_rank)
-            # 如果下单位置超过了 max_rank，则由 check_and_adjust_order 的触发器 B 负责后续回归
-            calc_res = self.calculate_safe_price(order_book, max_rank=None)
+            # 全局搜索最优安全位置
+            calc_res = self.calculate_safe_price(order_book)
             
             if not calc_res:
                 logger.warning(f"在全球范围内亦无法找到满足 ${self.min_protection} 保护的安全价格")
@@ -446,45 +440,26 @@ class SoloMarketMonitor:
             # 获取当前状态
             current_rank, current_protection = self._get_rank_and_protection(order_book, "BUY", order.price)
             
-            needs_adjust = False
-            reason = ""
-            calc_res = None
+            # 每次检查时，重新计算最优安全位置
+            calc_res = self.calculate_safe_price(order_book)
             
-            # 触发器 A: 保护不足 (始终监控)
-            if current_protection < self.min_protection:
-                needs_adjust = True
-                reason = "保护不足"
-                logger.info(f"市场 {topic_id} {reason}: 当前保护 ${current_protection:.0f} < 阈值 ${self.min_protection}")
-                
-                # 寻找新位置：先看范围内，再看全球
-                calc_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
-                if not calc_res:
-                    calc_res = self.calculate_safe_price(order_book) # 全球搜索
-            
-            # 触发器 B: 档位超标 (仅在当前处于范围推荐外，且范围内出现了新的安全位置时触发)
-            elif current_rank > self.max_rank:
-                # 检查范围内是否有安全价格可以回归
-                back_in_range_res = self.calculate_safe_price(order_book, max_rank=self.max_rank)
-                if back_in_range_res:
-                    # 发现范围内有安全位置了，执行回归
-                    needs_adjust = True
-                    reason = "档位超标 (回归范围)"
-                    calc_res = back_in_range_res
-                    logger.info(f"市场 {topic_id} {reason}: 当前买{current_rank}，探测到范围内买{calc_res[1]}已安全")
-                else:
-                    # 虽然档位超标，但范围内依然不安全，继续保持当前深度观察，不报警
-                    pass
-            
-            if not needs_adjust or not calc_res:
+            if not calc_res:
+                # 整个订单簿都不满足保护要求，保持当前位置
                 order.last_check_time = time.time()
                 return True
             
             new_price, new_rank = calc_res
             
-            # 如果新算出的价格和旧价格一致，且不是因为保护不足（即保护依然由于某种边界计算导致的微小差异），则忽略
+            # 如果新价格与当前一致，无需调整
             if abs(new_price - order.price) < 0.00001:
+                order.last_check_time = time.time()
                 return True
 
+            # 判断调整方向
+            if new_price > order.price:
+                reason = "前方出现安全位置 (前进)"
+            else:
+                reason = "保护不足 (后退)"
 
             # 打印前10档盘口信息，辅助观察
             logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -669,7 +644,7 @@ class SoloMarketMonitor:
                         self.fetcher.set_mock_bid(0, 0.85, 2000.0)
                         time.sleep(1)
 
-                time.sleep(1)  # 尽可能频繁检查
+                time.sleep(3)  # 每3秒检查一次订单簿
         
         except KeyboardInterrupt:
             # 优雅处理退出，避免 loguru 在 Python 关闭时的 datetime 报错
@@ -732,7 +707,6 @@ def main():
         config['simulation'] = True
         config['solo_market']['topic_ids'] = [4306]
         config['solo_market']['min_protection_amount'] = 500
-        config['solo_market']['check_bid_position'] = 5 # 模拟模式把限制调小，容易触发
 
     # 创建监控器
     monitor = SoloMarketMonitor(config)
